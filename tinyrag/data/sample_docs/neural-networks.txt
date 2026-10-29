@@ -1,0 +1,9 @@
+Neural Networks Basics
+
+A neural network is a machine learning model inspired by the human brain. It consists of layers of interconnected nodes called neurons. Each connection has a weight that adjusts during training.
+
+The input layer receives raw data, hidden layers transform it through weighted sums and activation functions, and the output layer produces the final prediction. Common activation functions include ReLU, sigmoid, and tanh.
+
+Training uses backpropagation: the network compares its prediction to the true answer, computes the error, and updates weights using gradient descent. Over many iterations, the error decreases and accuracy improves.
+
+Deep learning simply means neural networks with many hidden layers. More layers can learn more complex patterns, but they also need more data and compute to train well.
