@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tinyrag"
+version = "1.0.0"
+description = "Ask questions over your own documents — tiny RAG with no API key"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Hassan Abbasi" }]
+dependencies = []
+
+[project.scripts]
+tinyrag = "tinyrag.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["tinyrag*"]
+
+[tool.setuptools.package-data]
+tinyrag = ["data/sample_docs/*.txt"]
