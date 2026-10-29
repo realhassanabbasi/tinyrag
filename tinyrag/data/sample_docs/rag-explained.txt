@@ -1,0 +1,9 @@
+What is Retrieval-Augmented Generation
+
+Retrieval-Augmented Generation, or RAG, is a technique that combines a retriever with a generator. Instead of relying only on what a language model memorized during training, RAG first searches a document collection for relevant passages and then uses them to produce an answer.
+
+The pipeline has three stages. First, documents are split into chunks and converted into vector embeddings. Second, the user query is embedded the same way and the most similar chunks are retrieved, usually with cosine similarity. Third, the retrieved chunks are passed to the model along with the question.
+
+RAG reduces hallucinations because answers are grounded in real documents. It also lets a system answer questions about private or recent data the model never saw during training. The main costs are building the index and the extra retrieval step at query time.
+
+A minimal RAG can be built without any API: TF-IDF vectors replace neural embeddings, and extractive answering replaces generation. It is less powerful but fully offline and free.
