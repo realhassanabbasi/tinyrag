@@ -1,0 +1,9 @@
+Python for Machine Learning
+
+Python is the most popular language for machine learning. Its ecosystem includes NumPy for numerical computing, pandas for data manipulation, and scikit-learn for classical algorithms like regression, decision trees, and clustering.
+
+For deep learning, PyTorch and TensorFlow dominate. PyTorch is favored in research for its dynamic computation graphs and Pythonic API. TensorFlow, backed by Google, is strong in production deployment with tools like TF Serving and TensorFlow Lite for mobile.
+
+A typical ML workflow in Python: load data with pandas, explore it with matplotlib, split into train and test sets, train a model with scikit-learn or PyTorch, evaluate with accuracy or F1 score, and iterate. Jupyter notebooks make experimentation interactive.
+
+Virtual environments keep project dependencies isolated. The command python -m venv creates one, and pip installs packages into it. Reproducibility matters: pin versions in a requirements file so others can recreate your setup.
