@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 
 from . import __version__
 from .answerer import answer
 from .chunker import chunk_folder
+from .evidence import evidence_payload, format_evidence
 from .retriever import retrieve
 from .store import build_index, load_index, save_index
 from .vectorizer import build_idf, tokenize, vectorize
@@ -29,7 +31,8 @@ def cmd_index(folder: str, index_path: str = DEFAULT_INDEX) -> None:
     print(f"indexed {n_docs} documents → {len(records)} chunks → {index_path}")
 
 
-def cmd_ask(question: str, index_path: str = DEFAULT_INDEX, k: int = 3) -> None:
+def cmd_ask(question: str, index_path: str = DEFAULT_INDEX, k: int = 3,
+            sources: int = 0, as_json: bool = False) -> None:
     if not os.path.exists(index_path):
         print("no index found — run `tinyrag index <folder>` first")
         return
@@ -38,11 +41,25 @@ def cmd_ask(question: str, index_path: str = DEFAULT_INDEX, k: int = 3) -> None:
     q_vec = vectorize(q_terms, index["idf"])
     ranked = retrieve(q_vec, index["vectors"], k=k)
     result = answer(set(q_terms), index["idf"], ranked, index["chunks"])
+    rows = evidence_payload(ranked, index["chunks"], n=k)
+    if as_json:
+        payload = {
+            "question": question,
+            "answer": result["text"],
+            "doc": result["doc"],
+            "chunk_id": result["chunk_id"],
+            "confidence": result["confidence"],
+            "sources": rows,
+        }
+        print(json.dumps(payload, indent=2))
+        return
     print(f"\nQ: {question}\n")
     print(f"A: {result['text']}")
     if result["doc"]:
         print(f"\n   ↳ {result['doc']} (chunk {result['chunk_id']}, "
               f"confidence {result['confidence']})")
+        if sources > 0 and rows:
+            print(f"\n{format_evidence(rows[:sources])}")
     else:
         print("\n   (tip: index more documents or rephrase the question)")
 
@@ -61,12 +78,16 @@ def main(argv: list[str] | None = None) -> None:
     pa.add_argument("question", help="your question in quotes")
     pa.add_argument("--index", default=DEFAULT_INDEX, help="index file path")
     pa.add_argument("-k", type=int, default=3, help="chunks to consider")
+    pa.add_argument("--sources", type=int, default=0,
+                    help="show the top N retrieved chunks as evidence")
+    pa.add_argument("--json", action="store_true",
+                    help="print the answer + sources as JSON")
 
     args = p.parse_args(argv)
     if args.cmd == "index":
         cmd_index(args.folder, args.out)
     elif args.cmd == "ask":
-        cmd_ask(args.question, args.index, args.k)
+        cmd_ask(args.question, args.index, args.k, args.sources, args.json)
 
 
 if __name__ == "__main__":
