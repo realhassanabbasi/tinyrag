@@ -1,5 +1,7 @@
 """Tests for tinyrag. Run: python -m unittest discover -s tests"""
 
+import contextlib
+import io
 import json
 import os
 import shutil
@@ -9,7 +11,8 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from tinyrag import answerer, chunker, retriever, store, vectorizer
+from tinyrag import __version__, answerer, chunker, evidence, retriever, store, vectorizer
+from tinyrag.cli import main
 
 
 class TestChunker(unittest.TestCase):
@@ -128,6 +131,96 @@ class TestEndToEnd(unittest.TestCase):
         res = answerer.answer(set(vectorizer.tokenize(q)), idf, ranked, records)
         self.assertEqual(res["doc"], "neural-networks.txt")
         self.assertIn("backprop", res["text"].lower())
+
+
+class TestEvidence(unittest.TestCase):
+    def _chunks(self):
+        return [
+            {"doc": "a.txt", "chunk_id": 0,
+             "text": "Cats sleep all day. Dogs bark at night."},
+            {"doc": "b.txt", "chunk_id": 2,
+             "text": "Python is a programming language. It is very popular."},
+        ]
+
+    def test_payload_shape(self):
+        rows = evidence.evidence_payload([(0, 0.29), (1, 0.10)], self._chunks())
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0], {"rank": 1, "doc": "a.txt", "chunk_id": 0,
+                                   "score": 0.29,
+                                   "excerpt": "Cats sleep all day. Dogs bark at night."})
+        self.assertEqual(rows[1]["rank"], 2)
+        self.assertEqual(rows[1]["doc"], "b.txt")
+        self.assertEqual(rows[1]["chunk_id"], 2)
+
+    def test_zero_score_dropped(self):
+        rows = evidence.evidence_payload([(0, 0.29), (1, 0.0)], self._chunks())
+        self.assertEqual(len(rows), 1)  # a zero-score chunk matched nothing
+
+    def test_excerpt_truncates(self):
+        long_text = "word " * 100
+        chunks = [{"doc": "a.txt", "chunk_id": 0, "text": long_text}]
+        rows = evidence.evidence_payload([(0, 0.5)], chunks, excerpt_chars=20)
+        self.assertTrue(rows[0]["excerpt"].endswith("…"))
+        self.assertLessEqual(len(rows[0]["excerpt"]), 21)
+
+    def test_n_caps_rows(self):
+        rows = evidence.evidence_payload([(0, 0.29), (1, 0.10)],
+                                         self._chunks(), n=1)
+        self.assertEqual(len(rows), 1)
+
+    def test_format_evidence(self):
+        rows = evidence.evidence_payload([(0, 0.29)], self._chunks())
+        text = evidence.format_evidence(rows)
+        self.assertIn("Evidence:", text)
+        self.assertIn("1. a.txt (chunk 0, 0.29)", text)
+        self.assertIn("Cats sleep all day", text)
+
+
+class TestAskSources(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.idx = os.path.join(self.tmp, "index.json")
+        base = os.path.join(os.path.dirname(__file__), "..", "tinyrag",
+                            "data", "sample_docs")
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["index", base, "--out", self.idx])
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def _ask(self, *argv):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["ask", *argv, "--index", self.idx])
+        return buf.getvalue()
+
+    def test_sources_shows_evidence(self):
+        out = self._ask("what is backpropagation", "--sources", "2")
+        self.assertIn("Evidence:", out)
+        self.assertIn("neural-networks.txt", out)
+        self.assertIn("1. ", out)
+
+    def test_default_ask_hides_evidence(self):
+        out = self._ask("what is backpropagation")
+        self.assertNotIn("Evidence:", out)
+
+    def test_json_carries_sources(self):
+        out = self._ask("what is backpropagation", "--json")
+        payload = json.loads(out)  # pure JSON, no stray text
+        self.assertEqual(payload["doc"], "neural-networks.txt")
+        self.assertIn("backprop", payload["answer"].lower())
+        self.assertGreaterEqual(len(payload["sources"]), 1)
+        self.assertEqual(payload["sources"][0]["rank"], 1)
+        self.assertIn("excerpt", payload["sources"][0])
+
+    def test_miss_has_no_evidence(self):
+        out = self._ask("what is the capital of france", "--sources", "3")
+        self.assertNotIn("Evidence:", out)
+        self.assertIn("couldn't find anything", out)
+
+    def test_version_is_1_1_0(self):
+        self.assertEqual(__version__, "1.1.0")
 
 
 if __name__ == "__main__":
