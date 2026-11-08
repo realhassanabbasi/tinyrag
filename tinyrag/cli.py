@@ -11,6 +11,7 @@ from . import __version__
 from .answerer import answer
 from .chunker import chunk_folder
 from .evidence import evidence_payload, format_evidence
+from .refresh import format_refresh, refresh_index, scan_folder
 from .retriever import retrieve
 from .store import build_index, load_index, save_index
 from .vectorizer import build_idf, tokenize, vectorize
@@ -26,9 +27,26 @@ def cmd_index(folder: str, index_path: str = DEFAULT_INDEX) -> None:
     docs_tokens = [tokenize(r["text"]) for r in records]
     idf = build_idf(docs_tokens)
     vectors = [vectorize(t, idf) for t in docs_tokens]
-    save_index(build_index(records, idf, vectors), index_path)
+    save_index(build_index(records, idf, vectors,
+                           meta={"docs": scan_folder(folder)}), index_path)
     n_docs = len({r["doc"] for r in records})
     print(f"indexed {n_docs} documents → {len(records)} chunks → {index_path}")
+
+
+def cmd_refresh(folder: str, index_path: str = DEFAULT_INDEX,
+                as_json: bool = False) -> None:
+    if not os.path.isdir(folder):
+        print(f"no such folder: {folder}")
+        return
+    try:
+        report = refresh_index(folder, index_path)
+    except FileNotFoundError:
+        print("no index found — run `tinyrag index <folder>` first")
+        return
+    if as_json:
+        print(json.dumps(report, indent=2))
+        return
+    print(format_refresh(report))
 
 
 def cmd_ask(question: str, index_path: str = DEFAULT_INDEX, k: int = 3,
@@ -83,11 +101,19 @@ def main(argv: list[str] | None = None) -> None:
     pa.add_argument("--json", action="store_true",
                     help="print the answer + sources as JSON")
 
+    pr = sub.add_parser("refresh", help="re-index only files that changed")
+    pr.add_argument("folder", help="folder with documents")
+    pr.add_argument("--index", default=DEFAULT_INDEX, help="index file path")
+    pr.add_argument("--json", action="store_true",
+                    help="print the refresh report as JSON")
+
     args = p.parse_args(argv)
     if args.cmd == "index":
         cmd_index(args.folder, args.out)
     elif args.cmd == "ask":
         cmd_ask(args.question, args.index, args.k, args.sources, args.json)
+    elif args.cmd == "refresh":
+        cmd_refresh(args.folder, args.index, args.json)
 
 
 if __name__ == "__main__":
