@@ -20,6 +20,10 @@ def load_index(path: str) -> dict:
 
 
 def build_index(records: list[dict], idf: dict[str, float],
-                vectors: list[dict[str, float]]) -> dict:
+                vectors: list[dict[str, float]],
+                meta: dict | None = None) -> dict:
     """Bundle everything ask-time needs into one serializable dict."""
-    return {"chunks": records, "idf": idf, "vectors": vectors}
+    index = {"chunks": records, "idf": idf, "vectors": vectors}
+    if meta is not None:
+        index["meta"] = meta
+    return index
