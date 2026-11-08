@@ -219,8 +219,102 @@ class TestAskSources(unittest.TestCase):
         self.assertNotIn("Evidence:", out)
         self.assertIn("couldn't find anything", out)
 
-    def test_version_is_1_1_0(self):
-        self.assertEqual(__version__, "1.1.0")
+    def test_version_is_1_2_0(self):
+        self.assertEqual(__version__, "1.2.0")
+
+
+class TestRefresh(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.docs = os.path.join(self.tmp, "docs")
+        os.makedirs(self.docs)
+        self.idx = os.path.join(self.tmp, "index.json")
+        self._write("a.txt", "alpha beta gamma " * 30)
+        self._write("b.txt", "delta epsilon zeta " * 30)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["index", self.docs, "--out", self.idx])
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def _write(self, name, text):
+        with open(os.path.join(self.docs, name), "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def _refresh(self, *argv):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["refresh", self.docs, "--index", self.idx, *argv])
+        return buf.getvalue()
+
+    def _ask(self, question):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["ask", question, "--index", self.idx])
+        return buf.getvalue()
+
+    def test_no_change_refresh_keeps_everything(self):
+        out = self._refresh()
+        self.assertIn("Unchanged: 2 (a.txt, b.txt)", out)
+        self.assertIn("Added: 0", out)
+        self.assertIn("index now: 2 documents, 2 chunks", out)
+        self.assertIn("alpha", self._ask("what is alpha beta"))
+
+    def test_edited_file_is_updated_and_searchable(self):
+        self._write("a.txt", "quokka wombat koala " * 30)
+        out = self._refresh()
+        self.assertIn("Updated: 1 (a.txt)", out)
+        self.assertIn("Unchanged: 1 (b.txt)", out)
+        self.assertIn("quokka", self._ask("what is a quokka wombat"))
+
+    def test_added_file_is_indexed(self):
+        self._write("c.txt", "mango papaya guava " * 30)
+        out = self._refresh()
+        self.assertIn("Added: 1 (c.txt)", out)
+        self.assertIn("mango", self._ask("what is mango papaya"))
+
+    def test_deleted_file_is_removed(self):
+        os.remove(os.path.join(self.docs, "b.txt"))
+        out = self._refresh()
+        self.assertIn("Removed: 1 (b.txt)", out)
+        self.assertIn("index now: 1 documents, 1 chunks", out)
+        self.assertIn("couldn't find anything",
+                      self._ask("what is delta epsilon"))
+
+    def test_legacy_index_rebuilds_once(self):
+        index = store.load_index(self.idx)
+        index.pop("meta", None)  # simulate a v1.1.0 index
+        store.save_index(index, self.idx)
+        out = self._refresh()
+        self.assertIn("no file signatures", out)
+        self.assertIn("Updated: 2 (a.txt, b.txt)", out)
+        out2 = self._refresh()  # second refresh is a normal no-op
+        self.assertNotIn("no file signatures", out2)
+        self.assertIn("Unchanged: 2", out2)
+
+    def test_missing_index_says_index_first(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["refresh", self.docs, "--index",
+                  os.path.join(self.tmp, "nope.json")])
+        self.assertIn("run `tinyrag index", buf.getvalue())
+
+    def test_missing_folder_says_so(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["refresh", os.path.join(self.tmp, "gone"),
+                  "--index", self.idx])
+        self.assertIn("no such folder", buf.getvalue())
+
+    def test_json_report_schema(self):
+        out = self._refresh("--json")
+        report = json.loads(out)  # pure JSON, no stray text
+        self.assertEqual(report["added"], [])
+        self.assertEqual(report["unchanged"], ["a.txt", "b.txt"])
+        self.assertEqual(report["docs"], 2)
+        self.assertEqual(report["chunks"], 2)
+        self.assertFalse(report["legacy"])
 
 
 if __name__ == "__main__":
