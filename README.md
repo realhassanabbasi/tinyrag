@@ -2,7 +2,7 @@
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-25%20passing-brightgreen?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-33%20passing-brightgreen?style=flat-square)
 ![Deps](https://img.shields.io/badge/dependencies-zero-blue?style=flat-square)
 
 **Ask questions over your own documents. No API key, no internet, no dependencies.**
@@ -17,6 +17,7 @@ TinyRAG is a minimal Retrieval-Augmented Generation pipeline built **from scratc
 - **Honest misses** — below-threshold queries get "I couldn't find anything" instead of a guess
 - **Persistent index** — build once, save to JSON, ask anytime without re-indexing
 - **Evidence view** — `ask --sources N` shows the ranked chunks behind an answer (doc, chunk, score, excerpt); `--json` prints the answer plus sources for scripts
+- **Incremental refresh** — `refresh` re-indexes only added/edited files, drops deleted ones, and leaves unchanged files alone (signature = mtime + size)
 - **IDF-weighted sentence picking** — rare terms (backpropagation) outrank common ones
 
 ## 🚀 Quickstart
@@ -29,6 +30,9 @@ tinyrag index ./my-notes
 
 # ask questions
 tinyrag ask "what is backpropagation"
+
+# add a document later, then refresh instead of re-indexing everything
+tinyrag refresh ./my-notes
 ```
 
 Or run the instant demo (no install needed):
@@ -83,6 +87,45 @@ JSON (`question`, `answer`, `doc`, `chunk_id`, `confidence`, `sources`).
 On an honest miss there is no Evidence block — nothing matched, so there
 is nothing to show.
 
+## 🔄 Refresh the index
+
+An index is a snapshot — documents grow, get edited, get deleted.
+`refresh` compares each file's signature (modification time + size)
+against the signatures stored in the index and only re-chunks what
+actually changed. Unchanged files keep their old chunks; deleted files
+drop out. IDF is corpus-wide, so vectors are rebuilt over the full
+record set every refresh — the saved work is the re-reading and
+re-chunking, not the math.
+
+```bash
+tinyrag refresh ./my-notes
+```
+
+```
+Added: 1 (deep-learning.txt)
+Updated: 0
+Removed: 0
+Unchanged: 2 (neural-networks.txt, python-ml.txt)
+index now: 3 documents, 3 chunks
+```
+
+The new document is searchable immediately — no full re-index needed:
+
+```
+>>> tinyrag ask "what is backpropagation"
+
+A: Backpropagation computes gradients by applying the chain rule through every layer.
+
+   ↳ deep-learning.txt (chunk 0, confidence 0.2)
+```
+
+A second refresh with nothing changed is a no-op that says so
+(`Unchanged: 3`, `Added: 0`). An index built by v1.1.0 has no stored
+signatures, so the first refresh after upgrading rebuilds all docs once
+and says so honestly (`note: old index had no file signatures`). For
+scripts, `--json` prints the report (`added`, `updated`, `removed`,
+`unchanged`, `docs`, `chunks`, `legacy`) as pure JSON.
+
 ## 🏗️ Architecture
 
 ```
@@ -123,22 +166,23 @@ is nothing to show.
 ## 🧪 Tests
 
 ```bash
-python -m unittest discover -s tests   # 25 tests, all passing
+python -m unittest discover -s tests   # 33 tests, all passing
 ```
 
-Covers: chunking boundaries and overlap, TF-IDF normalization and IDF weighting, cosine sanity, retrieval ranking, IDF-weighted answer picking, honest-miss behavior, index save/load roundtrip, evidence rows (shape, zero-score drop, excerpt truncation, --sources/--json CLI, miss shows no evidence), and a full end-to-end run over the sample docs.
+Covers: chunking boundaries and overlap, TF-IDF normalization and IDF weighting, cosine sanity, retrieval ranking, IDF-weighted answer picking, honest-miss behavior, index save/load roundtrip, evidence rows (shape, zero-score drop, excerpt truncation, --sources/--json CLI, miss shows no evidence), refresh (no-change no-op, edited/added/deleted files, legacy-index rebuild, missing index/folder, --json report), and a full end-to-end run over the sample docs.
 
 ## 📁 Project structure
 
 ```
 tinyrag/
 ├── tinyrag/
-│   ├── cli.py          # index / ask commands
+│   ├── cli.py          # index / ask / refresh commands
 │   ├── chunker.py      # sliding-window chunking
 │   ├── vectorizer.py   # tokenizer + TF-IDF + cosine, from scratch
 │   ├── retriever.py    # top-k cosine ranking
 │   ├── answerer.py     # extractive answering with citations
 │   ├── evidence.py     # evidence rows behind an answer (--sources/--json)
+│   ├── refresh.py      # incremental re-index (added/updated/removed/unchanged)
 │   ├── store.py        # index save/load (JSON)
 │   └── data/sample_docs/  # 3 demo documents
 ├── tests/test_tinyrag.py
