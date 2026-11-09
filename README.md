@@ -2,7 +2,7 @@
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-33%20passing-brightgreen?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-41%20passing-brightgreen?style=flat-square)
 ![Deps](https://img.shields.io/badge/dependencies-zero-blue?style=flat-square)
 
 **Ask questions over your own documents. No API key, no internet, no dependencies.**
@@ -18,6 +18,7 @@ TinyRAG is a minimal Retrieval-Augmented Generation pipeline built **from scratc
 - **Persistent index** — build once, save to JSON, ask anytime without re-indexing
 - **Evidence view** — `ask --sources N` shows the ranked chunks behind an answer (doc, chunk, score, excerpt); `--json` prints the answer plus sources for scripts
 - **Incremental refresh** — `refresh` re-indexes only added/edited files, drops deleted ones, and leaves unchanged files alone (signature = mtime + size)
+- **Index stats** — `stats` shows documents, chunks, vocabulary size, per-document word counts, and the most common terms, read straight from the saved index; `--json` prints the same numbers for scripts
 - **IDF-weighted sentence picking** — rare terms (backpropagation) outrank common ones
 
 ## 🚀 Quickstart
@@ -33,6 +34,9 @@ tinyrag ask "what is backpropagation"
 
 # add a document later, then refresh instead of re-indexing everything
 tinyrag refresh ./my-notes
+
+# see what is actually in the index
+tinyrag stats
 ```
 
 Or run the instant demo (no install needed):
@@ -126,6 +130,52 @@ and says so honestly (`note: old index had no file signatures`). For
 scripts, `--json` prints the report (`added`, `updated`, `removed`,
 `unchanged`, `docs`, `chunks`, `legacy`) as pure JSON.
 
+## 📊 Index stats
+
+After indexing, `stats` answers the obvious question: what is actually
+in this index? Everything is read from the saved index file — nothing
+is re-indexed or re-scored. Document counts come from the chunk
+records, vocabulary size from the stored IDF table, and the most common
+terms are counted from the chunk texts (a term counts once per chunk it
+appears in, so a word repeated fifty times in one chunk still counts
+once).
+
+```bash
+tinyrag stats
+```
+
+```
+Documents: 3
+Chunks: 3
+Vocabulary: 229 terms
+Words: 438 (avg 146.0 per chunk)
+Largest document: rag-explained.txt (1 chunk, 167 words)
+
+Per document:
+  neural-networks.txt — 1 chunk, 124 words
+  python-ml.txt — 1 chunk, 147 words
+  rag-explained.txt — 1 chunk, 167 words
+
+Most common terms (by chunks they appear in):
+  data — in 3 chunks
+  model — in 3 chunks
+  accuracy — in 2 chunks
+  also — in 2 chunks
+  answer — in 2 chunks
+  api — in 2 chunks
+  deep — in 2 chunks
+  during — in 2 chunks
+  language — in 2 chunks
+  learn — in 2 chunks
+```
+
+The output above is the real output on the bundled sample docs. For
+scripts, `--json` prints the same payload (`documents`, `chunks`,
+`terms`, `total_words`, `avg_chunk_words`, `docs`, `largest_doc`,
+`top_terms`, `has_data`) as pure JSON. With no index file it says
+`no index found — run tinyrag index <folder> first`; an empty index
+says so too instead of printing zeros as if they meant something.
+
 ## 🏗️ Architecture
 
 ```
@@ -166,23 +216,24 @@ scripts, `--json` prints the report (`added`, `updated`, `removed`,
 ## 🧪 Tests
 
 ```bash
-python -m unittest discover -s tests   # 33 tests, all passing
+python -m unittest discover -s tests   # 41 tests, all passing
 ```
 
-Covers: chunking boundaries and overlap, TF-IDF normalization and IDF weighting, cosine sanity, retrieval ranking, IDF-weighted answer picking, honest-miss behavior, index save/load roundtrip, evidence rows (shape, zero-score drop, excerpt truncation, --sources/--json CLI, miss shows no evidence), refresh (no-change no-op, edited/added/deleted files, legacy-index rebuild, missing index/folder, --json report), and a full end-to-end run over the sample docs.
+Covers: chunking boundaries and overlap, TF-IDF normalization and IDF weighting, cosine sanity, retrieval ranking, IDF-weighted answer picking, honest-miss behavior, index save/load roundtrip, evidence rows (shape, zero-score drop, excerpt truncation, --sources/--json CLI, miss shows no evidence), refresh (no-change no-op, edited/added/deleted files, legacy-index rebuild, missing index/folder, --json report), stats (aggregates, per-doc rows, top terms by chunk count, empty index, largest doc, text/--json CLI, missing index), and a full end-to-end run over the sample docs.
 
 ## 📁 Project structure
 
 ```
 tinyrag/
 ├── tinyrag/
-│   ├── cli.py          # index / ask / refresh commands
+│   ├── cli.py          # index / ask / refresh / stats commands
 │   ├── chunker.py      # sliding-window chunking
 │   ├── vectorizer.py   # tokenizer + TF-IDF + cosine, from scratch
 │   ├── retriever.py    # top-k cosine ranking
 │   ├── answerer.py     # extractive answering with citations
 │   ├── evidence.py     # evidence rows behind an answer (--sources/--json)
 │   ├── refresh.py      # incremental re-index (added/updated/removed/unchanged)
+│   ├── stats.py        # index stats (docs/chunks/vocab/top terms)
 │   ├── store.py        # index save/load (JSON)
 │   └── data/sample_docs/  # 3 demo documents
 ├── tests/test_tinyrag.py
