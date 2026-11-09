@@ -13,6 +13,7 @@ from .chunker import chunk_folder
 from .evidence import evidence_payload, format_evidence
 from .refresh import format_refresh, refresh_index, scan_folder
 from .retriever import retrieve
+from .stats import format_stats, stats_payload
 from .store import build_index, load_index, save_index
 from .vectorizer import build_idf, tokenize, vectorize
 
@@ -47,6 +48,17 @@ def cmd_refresh(folder: str, index_path: str = DEFAULT_INDEX,
         print(json.dumps(report, indent=2))
         return
     print(format_refresh(report))
+
+
+def cmd_stats(index_path: str = DEFAULT_INDEX, as_json: bool = False) -> None:
+    if not os.path.exists(index_path):
+        print("no index found — run `tinyrag index <folder>` first")
+        return
+    payload = stats_payload(load_index(index_path))
+    if as_json:
+        print(json.dumps(payload, indent=2))
+        return
+    print(format_stats(payload))
 
 
 def cmd_ask(question: str, index_path: str = DEFAULT_INDEX, k: int = 3,
@@ -107,6 +119,11 @@ def main(argv: list[str] | None = None) -> None:
     pr.add_argument("--json", action="store_true",
                     help="print the refresh report as JSON")
 
+    ps = sub.add_parser("stats", help="show what is in the index")
+    ps.add_argument("--index", default=DEFAULT_INDEX, help="index file path")
+    ps.add_argument("--json", action="store_true",
+                    help="print the stats as JSON")
+
     args = p.parse_args(argv)
     if args.cmd == "index":
         cmd_index(args.folder, args.out)
@@ -114,6 +131,8 @@ def main(argv: list[str] | None = None) -> None:
         cmd_ask(args.question, args.index, args.k, args.sources, args.json)
     elif args.cmd == "refresh":
         cmd_refresh(args.folder, args.index, args.json)
+    elif args.cmd == "stats":
+        cmd_stats(args.index, args.json)
 
 
 if __name__ == "__main__":
