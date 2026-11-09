@@ -11,7 +11,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from tinyrag import __version__, answerer, chunker, evidence, retriever, store, vectorizer
+from tinyrag import __version__, answerer, chunker, evidence, retriever, stats, store, vectorizer
 from tinyrag.cli import main
 
 
@@ -219,8 +219,8 @@ class TestAskSources(unittest.TestCase):
         self.assertNotIn("Evidence:", out)
         self.assertIn("couldn't find anything", out)
 
-    def test_version_is_1_2_0(self):
-        self.assertEqual(__version__, "1.2.0")
+    def test_version_is_1_3_0(self):
+        self.assertEqual(__version__, "1.3.0")
 
 
 class TestRefresh(unittest.TestCase):
@@ -315,6 +315,118 @@ class TestRefresh(unittest.TestCase):
         self.assertEqual(report["docs"], 2)
         self.assertEqual(report["chunks"], 2)
         self.assertFalse(report["legacy"])
+
+
+class TestStats(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.docs = os.path.join(self.tmp, "docs")
+        os.makedirs(self.docs)
+        self.idx = os.path.join(self.tmp, "index.json")
+        self._write("a.txt", "alpha beta gamma " * 30)
+        self._write("b.txt", "delta epsilon zeta " * 30)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["index", self.docs, "--out", self.idx])
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def _write(self, name, text):
+        with open(os.path.join(self.docs, name), "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def _stats(self, *argv):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["stats", "--index", self.idx, *argv])
+        return buf.getvalue()
+
+    def _payload(self):
+        return stats.stats_payload(store.load_index(self.idx))
+
+    def test_payload_aggregates(self):
+        payload = self._payload()
+        self.assertEqual(payload["documents"], 2)
+        self.assertEqual(payload["chunks"], 2)
+        self.assertEqual(payload["terms"], 6)  # alpha..zeta, stopwords none
+        self.assertEqual(payload["total_words"], 180)
+        self.assertEqual(payload["avg_chunk_words"], 90.0)
+        self.assertTrue(payload["has_data"])
+
+    def test_per_doc_rows(self):
+        payload = self._payload()
+        self.assertEqual(payload["docs"], [
+            {"doc": "a.txt", "chunks": 1, "words": 90},
+            {"doc": "b.txt", "chunks": 1, "words": 90},
+        ])
+        self.assertEqual(payload["largest_doc"]["chunks"], 1)
+
+    def test_top_terms_by_chunk_count(self):
+        chunks = [
+            {"doc": "a.txt", "chunk_id": 0, "text": "alpha beta"},
+            {"doc": "b.txt", "chunk_id": 0, "text": "alpha gamma"},
+            {"doc": "c.txt", "chunk_id": 0, "text": "delta"},
+        ]
+        idf = vectorizer.build_idf([vectorizer.tokenize(c["text"])
+                                    for c in chunks])
+        payload = stats.stats_payload({"chunks": chunks, "idf": idf,
+                                       "vectors": []})
+        self.assertEqual(payload["top_terms"][0],
+                         {"term": "alpha", "chunks": 2})
+        self.assertEqual(len(payload["top_terms"]), 4)
+
+    def test_empty_index_payload(self):
+        payload = stats.stats_payload({"chunks": [], "idf": {}, "vectors": []})
+        self.assertFalse(payload["has_data"])
+        self.assertEqual(payload["documents"], 0)
+        self.assertEqual(payload["chunks"], 0)
+        self.assertEqual(payload["terms"], 0)
+        self.assertEqual(payload["docs"], [])
+        self.assertEqual(payload["top_terms"], [])
+        self.assertIsNone(payload["largest_doc"])
+        self.assertIn("run `tinyrag index",
+                      stats.format_stats(payload))
+
+    def test_cli_text_output(self):
+        out = self._stats()
+        self.assertIn("Documents: 2", out)
+        self.assertIn("Chunks: 2", out)
+        self.assertIn("Vocabulary: 6 terms", out)
+        self.assertIn("Words: 180 (avg 90.0 per chunk)", out)
+        self.assertIn("a.txt — 1 chunk, 90 words", out)
+        self.assertIn("Most common terms", out)
+        self.assertIn("alpha — in 1 chunk", out)
+
+    def test_cli_json_schema(self):
+        payload = json.loads(self._stats("--json"))  # pure JSON, no stray text
+        self.assertEqual(payload["documents"], 2)
+        self.assertEqual(payload["chunks"], 2)
+        self.assertEqual(payload["terms"], 6)
+        self.assertEqual(payload["total_words"], 180)
+        self.assertEqual(payload["avg_chunk_words"], 90.0)
+        self.assertTrue(payload["has_data"])
+        self.assertEqual(len(payload["docs"]), 2)
+        self.assertEqual(len(payload["top_terms"]), 6)
+
+    def test_cli_missing_index_says_index_first(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["stats", "--index", os.path.join(self.tmp, "nope.json")])
+        self.assertIn("run `tinyrag index", buf.getvalue())
+
+    def test_largest_doc_picks_most_chunks(self):
+        chunks = [
+            {"doc": "a.txt", "chunk_id": 0, "text": "alpha beta"},
+            {"doc": "a.txt", "chunk_id": 1, "text": "gamma delta"},
+            {"doc": "b.txt", "chunk_id": 0, "text": "epsilon zeta"},
+        ]
+        idf = vectorizer.build_idf([vectorizer.tokenize(c["text"])
+                                    for c in chunks])
+        payload = stats.stats_payload({"chunks": chunks, "idf": idf,
+                                       "vectors": []})
+        self.assertEqual(payload["largest_doc"],
+                         {"doc": "a.txt", "chunks": 2, "words": 4})
 
 
 if __name__ == "__main__":
