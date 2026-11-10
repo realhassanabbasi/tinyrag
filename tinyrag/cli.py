@@ -9,6 +9,8 @@ import sys
 
 from . import __version__
 from .answerer import answer
+from .check import (check_payload, format_check, load_questions,
+                    record_expectations, save_questions)
 from .chunker import chunk_folder
 from .evidence import evidence_payload, format_evidence
 from .refresh import format_refresh, refresh_index, scan_folder
@@ -59,6 +61,39 @@ def cmd_stats(index_path: str = DEFAULT_INDEX, as_json: bool = False) -> None:
         print(json.dumps(payload, indent=2))
         return
     print(format_stats(payload))
+
+
+def cmd_check(questions_path: str, index_path: str = DEFAULT_INDEX,
+              as_json: bool = False, record: bool = False,
+              fail_on_change: bool = False) -> None:
+    if not os.path.exists(questions_path):
+        print(f"no such file: {questions_path}")
+        sys.exit(1)
+    try:
+        questions = load_questions(questions_path)
+    except ValueError as exc:
+        print(str(exc))
+        sys.exit(1)
+    if not os.path.exists(index_path):
+        print("no index found — run `tinyrag index <folder>` first")
+        return
+    index = load_index(index_path)
+    if record:
+        recorded = record_expectations(index, questions)
+        save_questions(questions_path, recorded)
+        n = sum(1 for q in recorded if q["expect"] is not None)
+        print(f"recorded {n} expectation(s) in {questions_path}")
+        for q in recorded:
+            expect = q["expect"] if q["expect"] is not None else "no answer"
+            print(f"  {q['question']} → {expect}")
+        return
+    payload = check_payload(index, questions)
+    if as_json:
+        print(json.dumps(payload, indent=2))
+    else:
+        print(format_check(payload))
+    if fail_on_change and payload["changed"] > 0:
+        sys.exit(1)
 
 
 def cmd_ask(question: str, index_path: str = DEFAULT_INDEX, k: int = 3,
@@ -124,6 +159,18 @@ def main(argv: list[str] | None = None) -> None:
     ps.add_argument("--json", action="store_true",
                     help="print the stats as JSON")
 
+    pc = sub.add_parser("check", help="re-answer a saved question set, "
+                        "flag answers that moved")
+    pc.add_argument("questions", help="JSON question-set file")
+    pc.add_argument("--index", default=DEFAULT_INDEX, help="index file path")
+    pc.add_argument("--json", action="store_true",
+                    help="print the check report as JSON")
+    pc.add_argument("--record", action="store_true",
+                    help="record the current top document as the "
+                    "expectation for each question")
+    pc.add_argument("--fail-on-change", action="store_true",
+                    help="exit 1 if any answer changed (for CI)")
+
     args = p.parse_args(argv)
     if args.cmd == "index":
         cmd_index(args.folder, args.out)
@@ -133,6 +180,9 @@ def main(argv: list[str] | None = None) -> None:
         cmd_refresh(args.folder, args.index, args.json)
     elif args.cmd == "stats":
         cmd_stats(args.index, args.json)
+    elif args.cmd == "check":
+        cmd_check(args.questions, args.index, args.json, args.record,
+                  args.fail_on_change)
 
 
 if __name__ == "__main__":
