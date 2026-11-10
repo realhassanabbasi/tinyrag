@@ -2,7 +2,7 @@
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-41%20passing-brightgreen?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-50%20passing-brightgreen?style=flat-square)
 ![Deps](https://img.shields.io/badge/dependencies-zero-blue?style=flat-square)
 
 **Ask questions over your own documents. No API key, no internet, no dependencies.**
@@ -19,6 +19,7 @@ TinyRAG is a minimal Retrieval-Augmented Generation pipeline built **from scratc
 - **Evidence view** — `ask --sources N` shows the ranked chunks behind an answer (doc, chunk, score, excerpt); `--json` prints the answer plus sources for scripts
 - **Incremental refresh** — `refresh` re-indexes only added/edited files, drops deleted ones, and leaves unchanged files alone (signature = mtime + size)
 - **Index stats** — `stats` shows documents, chunks, vocabulary size, per-document word counts, and the most common terms, read straight from the saved index; `--json` prints the same numbers for scripts
+- **Regression check** — `check` re-answers a saved question set after a refresh and flags answers that moved to a different document (or vanished); `--record` builds the baseline, `--fail-on-change` exits 1 for CI
 - **IDF-weighted sentence picking** — rare terms (backpropagation) outrank common ones
 
 ## 🚀 Quickstart
@@ -37,6 +38,10 @@ tinyrag refresh ./my-notes
 
 # see what is actually in the index
 tinyrag stats
+
+# guard the answers: record a baseline, then check after every refresh
+tinyrag check questions.json --record
+tinyrag check questions.json
 ```
 
 Or run the instant demo (no install needed):
@@ -176,6 +181,68 @@ scripts, `--json` prints the same payload (`documents`, `chunks`,
 `no index found — run tinyrag index <folder> first`; an empty index
 says so too instead of printing zeros as if they meant something.
 
+## ✅ Regression check
+
+`stats` shows what is in the index; `check` shows whether the index
+still answers the same way. A question set is a JSON file of questions
+plus the document each one should be answered from:
+
+```json
+{
+  "questions": [
+    {"question": "what is backpropagation?", "expect": null},
+    {"question": "what is python used for in machine learning?", "expect": null},
+    {"question": "how does RAG reduce hallucinations?", "expect": null}
+  ]
+}
+```
+
+`--record` fills in each `expect` from the current index — the
+baseline. A plain `check` re-answers every question against the
+current index and reports steady / changed / unrecorded per question:
+
+```bash
+tinyrag check questions.json --record
+```
+
+```
+recorded 3 expectation(s) in questions.json
+  what is backpropagation? → neural-networks.txt
+  what is python used for in machine learning? → python-ml.txt
+  how does RAG reduce hallucinations? → rag-explained.txt
+```
+
+```bash
+tinyrag check questions.json
+```
+
+```
+  ✓ what is backpropagation? — neural-networks.txt (0.09)
+  ✓ what is python used for in machine learning? — python-ml.txt (0.41)
+  ✓ how does RAG reduce hallucinations? — rag-explained.txt (0.29)
+
+3 checked: 3 steady, 0 changed
+```
+
+The point is what happens after a `refresh`. Edit a document, refresh,
+check again — an answer that moved (or vanished) is flagged, not
+silently changed:
+
+```
+  ✗ what is alpha beta — expected a.txt, now no answer (0.0)
+  ✓ what is delta epsilon — b.txt (0.82)
+
+2 checked: 1 steady, 1 changed
+```
+
+A question with no recorded expectation reports `?` and is never
+counted as a failure — the check only judges what was actually
+recorded. For scripts, `--json` prints the report (`results`,
+`checked`, `steady`, `changed`, `unrecorded`) as pure JSON, and
+`--fail-on-change` exits 1 when anything changed, so the check plugs
+straight into CI. A missing question file or malformed JSON is refused
+outright (exit 1) instead of running a half-check.
+
 ## 🏗️ Architecture
 
 ```
@@ -216,17 +283,17 @@ says so too instead of printing zeros as if they meant something.
 ## 🧪 Tests
 
 ```bash
-python -m unittest discover -s tests   # 41 tests, all passing
+python -m unittest discover -s tests   # 50 tests, all passing
 ```
 
-Covers: chunking boundaries and overlap, TF-IDF normalization and IDF weighting, cosine sanity, retrieval ranking, IDF-weighted answer picking, honest-miss behavior, index save/load roundtrip, evidence rows (shape, zero-score drop, excerpt truncation, --sources/--json CLI, miss shows no evidence), refresh (no-change no-op, edited/added/deleted files, legacy-index rebuild, missing index/folder, --json report), stats (aggregates, per-doc rows, top terms by chunk count, empty index, largest doc, text/--json CLI, missing index), and a full end-to-end run over the sample docs.
+Covers: chunking boundaries and overlap, TF-IDF normalization and IDF weighting, cosine sanity, retrieval ranking, IDF-weighted answer picking, honest-miss behavior, index save/load roundtrip, evidence rows (shape, zero-score drop, excerpt truncation, --sources/--json CLI, miss shows no evidence), refresh (no-change no-op, edited/added/deleted files, legacy-index rebuild, missing index/folder, --json report), stats (aggregates, per-doc rows, top terms by chunk count, empty index, largest doc, text/--json CLI, missing index), check (record fills expectations, steady on no change, changed after edit+refresh incl. honest miss, unrecorded never a failure, malformed JSON refused, text/--json CLI, --fail-on-change exit codes, missing file exits 1), and a full end-to-end run over the sample docs.
 
 ## 📁 Project structure
 
 ```
 tinyrag/
 ├── tinyrag/
-│   ├── cli.py          # index / ask / refresh / stats commands
+│   ├── cli.py          # index / ask / refresh / stats / check commands
 │   ├── chunker.py      # sliding-window chunking
 │   ├── vectorizer.py   # tokenizer + TF-IDF + cosine, from scratch
 │   ├── retriever.py    # top-k cosine ranking
@@ -234,6 +301,7 @@ tinyrag/
 │   ├── evidence.py     # evidence rows behind an answer (--sources/--json)
 │   ├── refresh.py      # incremental re-index (added/updated/removed/unchanged)
 │   ├── stats.py        # index stats (docs/chunks/vocab/top terms)
+│   ├── check.py        # regression check (saved question set, --record/--fail-on-change)
 │   ├── store.py        # index save/load (JSON)
 │   └── data/sample_docs/  # 3 demo documents
 ├── tests/test_tinyrag.py
