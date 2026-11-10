@@ -11,7 +11,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from tinyrag import __version__, answerer, chunker, evidence, retriever, stats, store, vectorizer
+from tinyrag import __version__, answerer, check, chunker, evidence, retriever, stats, store, vectorizer
 from tinyrag.cli import main
 
 
@@ -219,8 +219,8 @@ class TestAskSources(unittest.TestCase):
         self.assertNotIn("Evidence:", out)
         self.assertIn("couldn't find anything", out)
 
-    def test_version_is_1_3_0(self):
-        self.assertEqual(__version__, "1.3.0")
+    def test_version_is_1_4_0(self):
+        self.assertEqual(__version__, "1.4.0")
 
 
 class TestRefresh(unittest.TestCase):
@@ -427,6 +427,149 @@ class TestStats(unittest.TestCase):
                                        "vectors": []})
         self.assertEqual(payload["largest_doc"],
                          {"doc": "a.txt", "chunks": 2, "words": 4})
+
+
+class TestCheck(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.docs = os.path.join(self.tmp, "docs")
+        os.makedirs(self.docs)
+        self.idx = os.path.join(self.tmp, "index.json")
+        self.qfile = os.path.join(self.tmp, "questions.json")
+        self._write("a.txt", "alpha beta gamma " * 30)
+        self._write("b.txt", "delta epsilon zeta " * 30)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["index", self.docs, "--out", self.idx])
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def _write(self, name, text):
+        with open(os.path.join(self.docs, name), "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def _questions(self):
+        return [
+            {"question": "what is alpha beta", "expect": None},
+            {"question": "what is delta epsilon", "expect": None},
+        ]
+
+    def _check(self, *argv):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["check", self.qfile, "--index", self.idx, *argv])
+        return buf.getvalue()
+
+    def _record(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["check", self.qfile, "--index", self.idx, "--record"])
+        return buf.getvalue()
+
+    def _save_questions(self, questions):
+        check.save_questions(self.qfile, questions)
+
+    def test_record_fills_expectations_from_index(self):
+        self._save_questions(self._questions())
+        out = self._record()
+        self.assertIn("recorded 2 expectation(s)", out)
+        recorded = check.load_questions(self.qfile)
+        self.assertEqual(recorded[0]["expect"], "a.txt")
+        self.assertEqual(recorded[1]["expect"], "b.txt")
+
+    def test_check_steady_when_nothing_changed(self):
+        self._save_questions(self._questions())
+        self._record()
+        payload = check.check_payload(store.load_index(self.idx),
+                                      check.load_questions(self.qfile))
+        self.assertEqual(payload["checked"], 2)
+        self.assertEqual(payload["steady"], 2)
+        self.assertEqual(payload["changed"], 0)
+        self.assertEqual(payload["unrecorded"], 0)
+
+    def test_check_flags_changed_after_edit_and_refresh(self):
+        self._save_questions(self._questions())
+        self._record()
+        self._write("a.txt", "quokka wombat koala " * 30)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["refresh", self.docs, "--index", self.idx])
+        payload = check.check_payload(store.load_index(self.idx),
+                                      check.load_questions(self.qfile))
+        self.assertEqual(payload["changed"], 1)
+        changed = [r for r in payload["results"]
+                   if r["verdict"] == "changed"][0]
+        self.assertEqual(changed["question"], "what is alpha beta")
+        self.assertEqual(changed["expect"], "a.txt")
+        self.assertIsNone(changed["now"])  # alpha is gone: an honest miss
+        self.assertEqual(payload["steady"], 1)
+
+    def test_unrecorded_question_is_not_a_failure(self):
+        self._save_questions(self._questions())
+        payload = check.check_payload(store.load_index(self.idx),
+                                      check.load_questions(self.qfile))
+        self.assertEqual(payload["unrecorded"], 2)
+        self.assertEqual(payload["changed"], 0)
+        out = self._check()
+        self.assertIn("no expectation recorded", out)
+        self.assertIn("2 unrecorded", out)
+
+    def test_missing_file_raises(self):
+        with self.assertRaises(FileNotFoundError):
+            check.load_questions(os.path.join(self.tmp, "gone.json"))
+
+    def test_malformed_json_raises(self):
+        bad = os.path.join(self.tmp, "bad.json")
+        with open(bad, "w", encoding="utf-8") as f:
+            f.write("{not json")
+        with self.assertRaises(ValueError):
+            check.load_questions(bad)
+        with open(bad, "w", encoding="utf-8") as f:
+            json.dump({"questions": [{"nope": 1}]}, f)
+        with self.assertRaises(ValueError):
+            check.load_questions(bad)
+
+    def test_cli_text_and_json(self):
+        self._save_questions(self._questions())
+        self._record()
+        out = self._check()
+        self.assertIn("2 checked: 2 steady, 0 changed", out)
+        self.assertIn("✓ what is alpha beta", out)
+        payload = json.loads(self._check("--json"))  # pure JSON
+        self.assertEqual(payload["checked"], 2)
+        self.assertEqual(payload["steady"], 2)
+        self.assertEqual(payload["results"][0]["verdict"], "steady")
+        self.assertEqual(payload["results"][0]["expect"], "a.txt")
+        self.assertEqual(payload["results"][0]["now"], "a.txt")
+
+    def test_fail_on_change_exit_codes(self):
+        self._save_questions(self._questions())
+        self._record()
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):  # steady: exit 0, no raise
+            main(["check", self.qfile, "--index", self.idx,
+                  "--fail-on-change"])
+        self._write("a.txt", "quokka wombat koala " * 30)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["refresh", self.docs, "--index", self.idx])
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            with self.assertRaises(SystemExit) as cm:
+                main(["check", self.qfile, "--index", self.idx,
+                      "--fail-on-change"])
+        self.assertEqual(cm.exception.code, 1)
+        self.assertIn("1 changed", buf.getvalue())
+
+    def test_cli_missing_file_exits_1(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            with self.assertRaises(SystemExit) as cm:
+                main(["check", os.path.join(self.tmp, "gone.json"),
+                      "--index", self.idx])
+        self.assertEqual(cm.exception.code, 1)
+        self.assertIn("no such file", buf.getvalue())
 
 
 if __name__ == "__main__":
