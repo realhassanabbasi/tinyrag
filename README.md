@@ -2,7 +2,7 @@
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-50%20passing-brightgreen?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-59%20passing-brightgreen?style=flat-square)
 ![Deps](https://img.shields.io/badge/dependencies-zero-blue?style=flat-square)
 
 **Ask questions over your own documents. No API key, no internet, no dependencies.**
@@ -20,6 +20,7 @@ TinyRAG is a minimal Retrieval-Augmented Generation pipeline built **from scratc
 - **Incremental refresh** — `refresh` re-indexes only added/edited files, drops deleted ones, and leaves unchanged files alone (signature = mtime + size)
 - **Index stats** — `stats` shows documents, chunks, vocabulary size, per-document word counts, and the most common terms, read straight from the saved index; `--json` prints the same numbers for scripts
 - **Regression check** — `check` re-answers a saved question set after a refresh and flags answers that moved to a different document (or vanished); `--record` builds the baseline, `--fail-on-change` exits 1 for CI
+- **Search the index** — `search` lists the chunks that mention a word or phrase (doc, chunk, score, excerpt) using the same retriever `ask` uses, so search results always agree with what `ask` would cite; `-k` caps the matches, `--json` prints them for scripts
 - **IDF-weighted sentence picking** — rare terms (backpropagation) outrank common ones
 
 ## 🚀 Quickstart
@@ -38,6 +39,9 @@ tinyrag refresh ./my-notes
 
 # see what is actually in the index
 tinyrag stats
+
+# find the chunks that mention a word, before you ask
+tinyrag search "backpropagation"
 
 # guard the answers: record a baseline, then check after every refresh
 tinyrag check questions.json --record
@@ -243,6 +247,51 @@ recorded. For scripts, `--json` prints the report (`results`,
 straight into CI. A missing question file or malformed JSON is refused
 outright (exit 1) instead of running a half-check.
 
+## 🔍 Search the index
+
+`ask` answers one question with one sentence; `stats` counts what is
+indexed. Neither shows you *where* a word lives. `search` lists the
+matching chunks — doc, chunk, score, excerpt — so you can see what the
+index knows before you ask, and debug a bad answer by checking what the
+retriever actually returned. The rows come from the same evidence
+function behind `ask --sources`, so a search result always agrees with
+what `ask` would cite for the same words. Chunks that scored 0.0 are
+never matches: they matched nothing.
+
+```bash
+tinyrag search "python machine learning"
+```
+
+```
+2 matches for "python machine learning" (3 chunks searched):
+  1. python-ml.txt (chunk 0, 0.41) — "Python for Machine Learning Python is the most popular language for machine learning. Its ecosystem includes NumPy for numerical computing, pandas for data manipulation, and scikit-learn for classical…"
+  2. neural-networks.txt (chunk 0, 0.11) — "Neural Networks Basics A neural network is a machine learning model inspired by the human brain. It consists of layers of interconnected nodes called neurons. Each connection has a weight that adjusts…"
+```
+
+`-k` caps the matches (default 5); a query with no overlap says so
+honestly instead of forcing a guess:
+
+```bash
+tinyrag search "neural network" -k 1
+```
+
+```
+1 match for "neural network" (3 chunks searched):
+  1. neural-networks.txt (chunk 0, 0.27) — "Neural Networks Basics A neural network is a machine learning model inspired by the human brain. It consists of layers of interconnected nodes called neurons. Each connection has a weight that adjusts…"
+```
+
+```bash
+tinyrag search "quantum flux capacitor"
+```
+
+```
+No matches for "quantum flux capacitor" — nothing in the index scored above 0. Try different words or index more documents.
+```
+
+For scripts, `--json` prints the report (`query`, `matches`,
+`total`, `searched_chunks`) as pure JSON. With no index file it says
+`no index found — run tinyrag index <folder> first`.
+
 ## 🏗️ Architecture
 
 ```
@@ -283,17 +332,17 @@ outright (exit 1) instead of running a half-check.
 ## 🧪 Tests
 
 ```bash
-python -m unittest discover -s tests   # 50 tests, all passing
+python -m unittest discover -s tests   # 59 tests, all passing
 ```
 
-Covers: chunking boundaries and overlap, TF-IDF normalization and IDF weighting, cosine sanity, retrieval ranking, IDF-weighted answer picking, honest-miss behavior, index save/load roundtrip, evidence rows (shape, zero-score drop, excerpt truncation, --sources/--json CLI, miss shows no evidence), refresh (no-change no-op, edited/added/deleted files, legacy-index rebuild, missing index/folder, --json report), stats (aggregates, per-doc rows, top terms by chunk count, empty index, largest doc, text/--json CLI, missing index), check (record fills expectations, steady on no change, changed after edit+refresh incl. honest miss, unrecorded never a failure, malformed JSON refused, text/--json CLI, --fail-on-change exit codes, missing file exits 1), and a full end-to-end run over the sample docs.
+Covers: chunking boundaries and overlap, TF-IDF normalization and IDF weighting, cosine sanity, retrieval ranking, IDF-weighted answer picking, honest-miss behavior, index save/load roundtrip, evidence rows (shape, zero-score drop, excerpt truncation, --sources/--json CLI, miss shows no evidence), refresh (no-change no-op, edited/added/deleted files, legacy-index rebuild, missing index/folder, --json report), stats (aggregates, per-doc rows, top terms by chunk count, empty index, largest doc, text/--json CLI, missing index), check (record fills expectations, steady on no change, changed after edit+refresh incl. honest miss, unrecorded never a failure, malformed JSON refused, text/--json CLI, --fail-on-change exit codes, missing file exits 1), search (known-term match, best-first across docs, no-overlap empty result, -k cap, agreement with ask evidence, text/--json CLI, no-match message, missing index), and a full end-to-end run over the sample docs.
 
 ## 📁 Project structure
 
 ```
 tinyrag/
 ├── tinyrag/
-│   ├── cli.py          # index / ask / refresh / stats / check commands
+│   ├── cli.py          # index / ask / refresh / stats / check / search commands
 │   ├── chunker.py      # sliding-window chunking
 │   ├── vectorizer.py   # tokenizer + TF-IDF + cosine, from scratch
 │   ├── retriever.py    # top-k cosine ranking
@@ -302,6 +351,7 @@ tinyrag/
 │   ├── refresh.py      # incremental re-index (added/updated/removed/unchanged)
 │   ├── stats.py        # index stats (docs/chunks/vocab/top terms)
 │   ├── check.py        # regression check (saved question set, --record/--fail-on-change)
+│   ├── search.py       # search the index (matching chunks, -k/--json)
 │   ├── store.py        # index save/load (JSON)
 │   └── data/sample_docs/  # 3 demo documents
 ├── tests/test_tinyrag.py
