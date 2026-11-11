@@ -11,7 +11,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from tinyrag import __version__, answerer, check, chunker, evidence, retriever, stats, store, vectorizer
+from tinyrag import __version__, answerer, check, chunker, evidence, retriever, search, stats, store, vectorizer
 from tinyrag.cli import main
 
 
@@ -219,8 +219,8 @@ class TestAskSources(unittest.TestCase):
         self.assertNotIn("Evidence:", out)
         self.assertIn("couldn't find anything", out)
 
-    def test_version_is_1_4_0(self):
-        self.assertEqual(__version__, "1.4.0")
+    def test_version_is_1_5_0(self):
+        self.assertEqual(__version__, "1.5.0")
 
 
 class TestRefresh(unittest.TestCase):
@@ -570,6 +570,105 @@ class TestCheck(unittest.TestCase):
                       "--index", self.idx])
         self.assertEqual(cm.exception.code, 1)
         self.assertIn("no such file", buf.getvalue())
+
+
+class TestSearch(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.docs = os.path.join(self.tmp, "docs")
+        os.makedirs(self.docs)
+        self.idx = os.path.join(self.tmp, "index.json")
+        self._write("a.txt", "alpha beta gamma " * 30)
+        self._write("b.txt", "delta epsilon zeta " * 30)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["index", self.docs, "--out", self.idx])
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def _write(self, name, text):
+        with open(os.path.join(self.docs, name), "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def _search(self, *argv):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["search", "--index", self.idx, *argv])
+        return buf.getvalue()
+
+    def _payload(self, query, k=5):
+        return search.search_payload(store.load_index(self.idx), query, k=k)
+
+    def test_matches_known_term(self):
+        payload = self._payload("alpha beta")
+        self.assertEqual(payload["total"], 1)
+        self.assertEqual(payload["matches"][0]["doc"], "a.txt")
+        self.assertEqual(payload["matches"][0]["chunk_id"], 0)
+        self.assertGreater(payload["matches"][0]["score"], 0.0)
+        self.assertEqual(payload["searched_chunks"], 2)
+
+    def test_best_first_across_docs(self):
+        payload = self._payload("alpha delta gamma")
+        self.assertEqual(payload["total"], 2)
+        scores = [row["score"] for row in payload["matches"]]
+        self.assertEqual(scores, sorted(scores, reverse=True))
+        self.assertEqual(payload["matches"][0]["doc"], "a.txt")
+        self.assertEqual(payload["matches"][1]["doc"], "b.txt")
+
+    def test_no_overlap_returns_empty(self):
+        payload = self._payload("quokka wombat")
+        self.assertEqual(payload["total"], 0)
+        self.assertEqual(payload["matches"], [])
+        self.assertIn("No matches for", search.format_search(payload))
+
+    def test_k_limits_rows(self):
+        payload = self._payload("alpha delta", k=1)
+        self.assertEqual(payload["total"], 1)
+        self.assertEqual(len(payload["matches"]), 1)
+
+    def test_agrees_with_ask_evidence(self):
+        # Same query, same retriever: search's top row must equal the
+        # top evidence row `ask --sources` would print.
+        index = store.load_index(self.idx)
+        query = "alpha beta"
+        q_vec = vectorizer.vectorize(vectorizer.tokenize(query),
+                                     index["idf"])
+        ranked = retriever.retrieve(q_vec, index["vectors"], k=3)
+        rows = evidence.evidence_payload(ranked, index["chunks"], n=3)
+        payload = self._payload(query, k=3)
+        self.assertEqual(payload["matches"][0]["doc"], rows[0]["doc"])
+        self.assertEqual(payload["matches"][0]["chunk_id"],
+                         rows[0]["chunk_id"])
+        self.assertEqual(payload["matches"][0]["score"], rows[0]["score"])
+
+    def test_cli_text_output(self):
+        out = self._search("alpha beta")
+        self.assertIn('1 match for "alpha beta"', out)
+        self.assertIn("a.txt (chunk 0,", out)
+        self.assertIn("alpha beta gamma", out)
+
+    def test_cli_json_schema(self):
+        payload = json.loads(self._search("alpha delta", "--json"))
+        self.assertEqual(payload["query"], "alpha delta")
+        self.assertEqual(payload["total"], 2)
+        self.assertEqual(payload["searched_chunks"], 2)
+        self.assertEqual(len(payload["matches"]), 2)
+        self.assertEqual(
+            sorted(payload["matches"][0]),
+            ["chunk_id", "doc", "excerpt", "rank", "score"])
+
+    def test_cli_no_match_message(self):
+        out = self._search("quokka wombat")
+        self.assertIn('No matches for "quokka wombat"', out)
+        self.assertIn("Try different words", out)
+
+    def test_cli_missing_index_says_index_first(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["search", "alpha",
+                  "--index", os.path.join(self.tmp, "nope.json")])
+        self.assertIn("run `tinyrag index", buf.getvalue())
 
 
 if __name__ == "__main__":
