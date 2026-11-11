@@ -15,6 +15,7 @@ from .chunker import chunk_folder
 from .evidence import evidence_payload, format_evidence
 from .refresh import format_refresh, refresh_index, scan_folder
 from .retriever import retrieve
+from .search import format_search, search_payload
 from .stats import format_stats, stats_payload
 from .store import build_index, load_index, save_index
 from .vectorizer import build_idf, tokenize, vectorize
@@ -96,6 +97,18 @@ def cmd_check(questions_path: str, index_path: str = DEFAULT_INDEX,
         sys.exit(1)
 
 
+def cmd_search(query: str, index_path: str = DEFAULT_INDEX, k: int = 5,
+               as_json: bool = False) -> None:
+    if not os.path.exists(index_path):
+        print("no index found — run `tinyrag index <folder>` first")
+        return
+    payload = search_payload(load_index(index_path), query, k=k)
+    if as_json:
+        print(json.dumps(payload, indent=2))
+        return
+    print(format_search(payload))
+
+
 def cmd_ask(question: str, index_path: str = DEFAULT_INDEX, k: int = 3,
             sources: int = 0, as_json: bool = False) -> None:
     if not os.path.exists(index_path):
@@ -159,6 +172,15 @@ def main(argv: list[str] | None = None) -> None:
     ps.add_argument("--json", action="store_true",
                     help="print the stats as JSON")
 
+    ps = sub.add_parser("search", help="find the chunks that mention a "
+                        "word or phrase")
+    ps.add_argument("query", help="words to look for, in quotes")
+    ps.add_argument("--index", default=DEFAULT_INDEX, help="index file path")
+    ps.add_argument("-k", type=int, default=5,
+                    help="matches to show (default 5)")
+    ps.add_argument("--json", action="store_true",
+                    help="print the matches as JSON")
+
     pc = sub.add_parser("check", help="re-answer a saved question set, "
                         "flag answers that moved")
     pc.add_argument("questions", help="JSON question-set file")
@@ -174,6 +196,8 @@ def main(argv: list[str] | None = None) -> None:
     args = p.parse_args(argv)
     if args.cmd == "index":
         cmd_index(args.folder, args.out)
+    elif args.cmd == "search":
+        cmd_search(args.query, args.index, args.k, args.json)
     elif args.cmd == "ask":
         cmd_ask(args.question, args.index, args.k, args.sources, args.json)
     elif args.cmd == "refresh":
