@@ -4,6 +4,7 @@
 ![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
 ![Tests](https://img.shields.io/badge/tests-59%20passing-brightgreen?style=flat-square)
 ![Deps](https://img.shields.io/badge/dependencies-zero-blue?style=flat-square)
+[![Live demo](https://img.shields.io/badge/demo-live%20showcase-0D9488?style=flat-square)](https://realhassanabbasi.github.io/tinyrag/)
 
 **Ask questions over your own documents. No API key, no internet, no dependencies.**
 
@@ -55,6 +56,14 @@ git clone https://github.com/realhassanabbasi/tinyrag.git
 cd tinyrag
 python demo.py
 ```
+
+## 🌐 Live demo
+
+See TinyRAG run without installing anything — the interactive showcase walks through the full loop (index → ask → search → stats → check) on the bundled sample docs, with real terminal output from `tinyrag 1.5.0`:
+
+**https://realhassanabbasi.github.io/tinyrag/**
+
+Every transcript on the page was captured from the real CLI — no mockups. The page is a single self-contained file (`docs/index.html`), no external assets, no tracking.
 
 ## 💡 Example
 
