@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TinyRAG — Ask questions over your own documents</title>
+<meta name="description" content="TinyRAG is a zero-dependency RAG pipeline in pure Python: index a folder of documents, ask questions, get answers quoted from your documents with citations. No API key, no internet, no dependencies.">
+<style>
+  :root {
+    --bg: #0b0b0c; --panel: #141416; --panel2: #1a1a1d; --line: #26262a;
+    --text: #f4f4f5; --muted: #a1a1aa; --dim: #71717a;
+    --teal: #0d9488; --teal-bright: #2dd4bf; --green: #4ade80; --red: #f87171;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+    line-height: 1.6; -webkit-font-smoothing: antialiased; }
+  a { color: var(--teal-bright); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 0 20px 80px; }
+  header { padding: 72px 0 40px; text-align: center; }
+  .eyebrow { color: var(--teal-bright); font-size: 13px; letter-spacing: .18em;
+    text-transform: uppercase; font-weight: 600; }
+  h1 { font-size: 56px; line-height: 1.05; letter-spacing: -0.02em; margin: 16px 0 12px; }
+  h1 span { color: var(--teal-bright); }
+  .tagline { color: var(--muted); font-size: 19px; max-width: 560px; margin: 0 auto; }
+  .badges { margin-top: 22px; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+  .badge { border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px;
+    font-size: 13px; color: var(--muted); }
+  .badge b { color: var(--text); font-weight: 600; }
+  .cta { margin-top: 28px; display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+  .btn { display: inline-block; padding: 11px 22px; border-radius: 8px; font-weight: 600;
+    font-size: 15px; border: 1px solid var(--line); color: var(--text); }
+  .btn:hover { text-decoration: none; border-color: var(--teal); }
+  .btn.primary { background: var(--teal); border-color: var(--teal); color: #fff; }
+  .install { margin-top: 28px; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 14px 18px; text-align: left; overflow-x: auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 14px; color: var(--text); white-space: pre; }
+  .install .prompt { color: var(--teal-bright); }
+  section { margin-top: 56px; }
+  h2 { font-size: 26px; letter-spacing: -0.01em; margin-bottom: 8px; }
+  .sub { color: var(--muted); margin-bottom: 20px; max-width: 640px; }
+  .pipe { display: flex; align-items: stretch; gap: 0; flex-wrap: wrap; }
+  .step { flex: 1; min-width: 150px; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 16px; }
+  .step h3 { font-size: 15px; margin-bottom: 4px; }
+  .step p { color: var(--muted); font-size: 13.5px; }
+  .step .n { color: var(--teal-bright); font-family: ui-monospace, monospace; font-size: 12px; }
+  .arrow { align-self: center; color: var(--dim); padding: 0 8px; font-size: 18px; }
+  .terminal { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    overflow: hidden; }
+  .tabs { display: flex; border-bottom: 1px solid var(--line); background: var(--panel2);
+    overflow-x: auto; }
+  .tab { background: none; border: none; color: var(--muted); font: inherit; font-size: 14px;
+    padding: 12px 18px; cursor: pointer; border-bottom: 2px solid transparent; white-space: nowrap; }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--teal-bright); border-bottom-color: var(--teal); }
+  .panel { display: none; padding: 18px 20px; }
+  .panel.active { display: block; }
+  .panel pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 13.5px; line-height: 1.55; white-space: pre-wrap; word-break: break-word;
+    color: #d4d4d8; max-height: 460px; overflow-y: auto; }
+  .panel pre + .cmd { margin-top: 18px; }
+  .cmd { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 13.5px; color: var(--text); margin-bottom: 6px; }
+  .cmd .prompt { color: var(--teal-bright); }
+  .note { margin-top: 12px; color: var(--dim); font-size: 13px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px; }
+  .card h3 { font-size: 15px; margin-bottom: 4px; }
+  .card h3 code { color: var(--teal-bright); font-family: ui-monospace, monospace; font-size: 14px; }
+  .card p { color: var(--muted); font-size: 14px; }
+  .limits { color: var(--muted); font-size: 15px; }
+  .limits li { margin: 6px 0 6px 20px; }
+  footer { margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--line);
+    color: var(--dim); font-size: 14px; text-align: center; }
+  @media (max-width: 600px) {
+    h1 { font-size: 40px; }
+    .arrow { display: none; }
+    .step { min-width: 100%; margin-bottom: 8px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="eyebrow">Zero-dependency RAG &middot; Pure Python</div>
+  <h1>Tiny<span>RAG</span></h1>
+  <p class="tagline">Ask questions over your own documents. No API key, no internet, no dependencies.</p>
+  <div class="badges">
+    <span class="badge">Python <b>3.10+</b></span>
+    <span class="badge"><b>59</b> tests passing</span>
+    <span class="badge"><b>zero</b> dependencies</span>
+    <span class="badge">License <b>MIT</b></span>
+  </div>
+  <div class="cta">
+    <a class="btn primary" href="https://github.com/realhassanabbasi/tinyrag">View on GitHub</a>
+    <a class="btn" href="https://github.com/realhassanabbasi/tinyrag#quickstart">Install &amp; try it</a>
+  </div>
+  <div class="install"><span class="prompt">$</span> pip install git+https://github.com/realhassanabbasi/tinyrag.git
+<span class="prompt">$</span> tinyrag index ./my-notes
+<span class="prompt">$</span> tinyrag ask "what is backpropagation"</div>
+</header>
+
+<section>
+  <h2>How it works</h2>
+  <p class="sub">The whole pipeline — chunking, TF-IDF, retrieval, answering — is written by hand in pure Python. No sklearn, no numpy, no LLM.</p>
+  <div class="pipe">
+    <div class="step"><div class="n">01</div><h3>Chunk</h3><p>Documents split into a sliding window of 400 words with 80-word overlap.</p></div>
+    <div class="arrow">&rarr;</div>
+    <div class="step"><div class="n">02</div><h3>Vectorize</h3><p>TF-IDF from scratch, L2-normalized, English stopwords removed.</p></div>
+    <div class="arrow">&rarr;</div>
+    <div class="step"><div class="n">03</div><h3>Retrieve</h3><p>Cosine similarity ranks the chunks; the top-k go to the answerer.</p></div>
+    <div class="arrow">&rarr;</div>
+    <div class="step"><div class="n">04</div><h3>Answer</h3><p>Best sentence by IDF-weighted term overlap, quoted with its source.</p></div>
+  </div>
+</section>
+
+<section>
+  <h2>Try it in the terminal</h2>
+  <p class="sub">Every transcript below is real output from <code>tinyrag 1.5.0</code>, run on the three sample documents bundled with the repo. No mockups. Click a command to see it run.</p>
+  <div class="terminal">
+    <div class="tabs">
+      <button class="tab active" data-tab="index">index</button>
+      <button class="tab" data-tab="ask">ask</button>
+      <button class="tab" data-tab="search">search</button>
+      <button class="tab" data-tab="stats">stats</button>
+      <button class="tab" data-tab="check">check</button>
+    </div>
+    <div class="panel active" id="panel-index">
+<div class="cmd"><span class="prompt">$</span> tinyrag index ./my-notes</div>
+<pre>indexed 3 documents → 3 chunks → .tinyrag/index.json</pre>
+</div>
+    <div class="panel" id="panel-ask">
+<div class="cmd"><span class="prompt">$</span> tinyrag ask "what is rag"</div>
+<pre>Q: what is rag
+
+A: What is Retrieval-Augmented Generation Retrieval-Augmented Generation, or RAG, is a technique that combines a retriever with a generator.
+
+   ↳ rag-explained.txt (chunk 0, confidence 0.33)</pre>
+<div class="cmd"><span class="prompt">$</span> tinyrag ask "what is rag" --sources 2</div>
+<pre>Q: what is rag
+
+A: What is Retrieval-Augmented Generation Retrieval-Augmented Generation, or RAG, is a technique that combines a retriever with a generator.
+
+   ↳ rag-explained.txt (chunk 0, confidence 0.33)
+
+Evidence:
+  1. rag-explained.txt (chunk 0, 0.33) — "What is Retrieval-Augmented Generation Retrieval-Augmented Generation, or RAG, is a technique that combines a retriever with a generator. Instead of relying only on what a language model memorized dur…"</pre>
+</div>
+    <div class="panel" id="panel-search">
+<div class="cmd"><span class="prompt">$</span> tinyrag search "python machine learning"</div>
+<pre>2 matches for "python machine learning" (3 chunks searched):
+  1. python-ml.txt (chunk 0, 0.41) — "Python for Machine Learning Python is the most popular language for machine learning. Its ecosystem includes NumPy for numerical computing, pandas for data manipulation, and scikit-learn for classical…"
+  2. neural-networks.txt (chunk 0, 0.11) — "Neural Networks Basics A neural network is a machine learning model inspired by the human brain. It consists of layers of interconnected nodes called neurons. Each connection has a weight that adjusts…"</pre>
+</div>
+    <div class="panel" id="panel-stats">
+<div class="cmd"><span class="prompt">$</span> tinyrag stats</div>
+<pre>Documents: 3
+Chunks: 3
+Vocabulary: 229 terms
+Words: 438 (avg 146.0 per chunk)
+Largest document: rag-explained.txt (1 chunk, 167 words)
+
+Per document:
+  neural-networks.txt — 1 chunk, 124 words
+  python-ml.txt — 1 chunk, 147 words
+  rag-explained.txt — 1 chunk, 167 words
+
+Most common terms (by chunks they appear in):
+  data — in 3 chunks
+  model — in 3 chunks
+  accuracy — in 2 chunks
+  also — in 2 chunks
+  answer — in 2 chunks
+  api — in 2 chunks
+  deep — in 2 chunks
+  during — in 2 chunks
+  language — in 2 chunks
+  learn — in 2 chunks</pre>
+</div>
+    <div class="panel" id="panel-check">
+<div class="cmd"><span class="prompt">$</span> tinyrag check questions.json --record</div>
+<pre>recorded 3 expectation(s) in questions.json
+  what is rag → rag-explained.txt
+  what is a neural network → neural-networks.txt
+  which language is best for machine learning → python-ml.txt</pre>
+<div class="cmd"><span class="prompt">$</span> tinyrag check questions.json</div>
+<pre>  ✓ what is rag — rag-explained.txt (0.33)
+  ✓ what is a neural network — neural-networks.txt (0.27)
+  ✓ which language is best for machine learning — python-ml.txt (0.23)
+
+3 checked: 3 steady, 0 changed</pre>
+</div>
+  </div>
+  <p class="note">Answers are real sentences from your documents, never generated text. When nothing matches, TinyRAG says so honestly instead of hallucinating.</p>
+</section>
+
+<section>
+  <h2>What it can do</h2>
+  <p class="sub">Six commands, one loop: index &rarr; ask &rarr; inspect &rarr; guard.</p>
+  <div class="grid">
+    <div class="card"><h3><code>index</code></h3><p>Build a persistent JSON index from a folder of .txt / .md files. Build once, ask anytime.</p></div>
+    <div class="card"><h3><code>ask</code></h3><p>Extractive answers with a citation — document, chunk, confidence. <code>--sources N</code> shows the ranked evidence behind it.</p></div>
+    <div class="card"><h3><code>search</code></h3><p>List the chunks that mention a word, with scores and excerpts — the same retriever <code>ask</code> uses, so they always agree.</p></div>
+    <div class="card"><h3><code>stats</code></h3><p>Documents, chunks, vocabulary, per-document counts, most common terms — read straight from the saved index.</p></div>
+    <div class="card"><h3><code>refresh</code></h3><p>Re-index only added or edited files; drop deleted ones. A no-change refresh says so.</p></div>
+    <div class="card"><h3><code>check</code></h3><p>Re-answer a saved question set after a refresh and flag answers that moved or vanished. CI-ready with <code>--fail-on-change</code>.</p></div>
+  </div>
+</section>
+
+<section>
+  <h2>Honest limitations</h2>
+  <ul class="limits">
+    <li>English-only tokenizer — other languages won&rsquo;t tokenize.</li>
+    <li>Keyword matching, not semantics — &ldquo;car&rdquo; won&rsquo;t match &ldquo;automobile&rdquo;.</li>
+    <li>Small-scale by design — the whole index lives in memory as JSON; fine for notes and docs, not millions of pages.</li>
+  </ul>
+</section>
+
+<footer>
+  <p>Built by <a href="https://github.com/realhassanabbasi">Hassan Abbasi</a> — AI Engineer building AI-powered products with excellent user experiences.<br>
+  TinyRAG is MIT licensed. The transcripts above are real CLI output from tinyrag 1.5.0.</p>
+</footer>
+
+</div>
+<script>
+(function () {
+  var tabs = document.querySelectorAll(".tab");
+  tabs.forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      tabs.forEach(function (b) { b.classList.remove("active"); });
+      document.querySelectorAll(".panel").forEach(function (p) { p.classList.remove("active"); });
+      btn.classList.add("active");
+      document.getElementById("panel-" + btn.getAttribute("data-tab")).classList.add("active");
+    });
+  });
+})();
+</script>
+</body>
+</html>
