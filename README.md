@@ -2,7 +2,7 @@
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-59%20passing-brightgreen?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-69%20passing-brightgreen?style=flat-square)
 ![Deps](https://img.shields.io/badge/dependencies-zero-blue?style=flat-square)
 [![Live demo](https://img.shields.io/badge/demo-live%20showcase-0D9488?style=flat-square)](https://realhassanabbasi.github.io/tinyrag/)
 
@@ -22,6 +22,7 @@ TinyRAG is a minimal Retrieval-Augmented Generation pipeline built **from scratc
 - **Index stats** — `stats` shows documents, chunks, vocabulary size, per-document word counts, and the most common terms, read straight from the saved index; `--json` prints the same numbers for scripts
 - **Regression check** — `check` re-answers a saved question set after a refresh and flags answers that moved to a different document (or vanished); `--record` builds the baseline, `--fail-on-change` exits 1 for CI
 - **Search the index** — `search` lists the chunks that mention a word or phrase (doc, chunk, score, excerpt) using the same retriever `ask` uses, so search results always agree with what `ask` would cite; `-k` caps the matches, `--json` prints them for scripts
+- **Answer a whole question set** — `ask-batch` runs every question in a `check` file through the same `ask` pipeline and prints the answers with sources, or writes them as a Markdown FAQ with `-o`; `--json` prints them for scripts
 - **IDF-weighted sentence picking** — rare terms (backpropagation) outrank common ones
 
 ## 🚀 Quickstart
@@ -47,6 +48,10 @@ tinyrag search "backpropagation"
 # guard the answers: record a baseline, then check after every refresh
 tinyrag check questions.json --record
 tinyrag check questions.json
+
+# answer the whole set at once, or write it out as an FAQ page
+tinyrag ask-batch questions.json
+tinyrag ask-batch questions.json -o answers.md
 ```
 
 Or run the instant demo (no install needed):
@@ -301,6 +306,55 @@ For scripts, `--json` prints the report (`query`, `matches`,
 `total`, `searched_chunks`) as pure JSON. With no index file it says
 `no index found — run tinyrag index <folder> first`.
 
+## 📄 Answer a whole question set
+
+`ask` answers one question; `check` re-answers a saved set only to
+say whether anything moved. Neither hands you the answers
+themselves. `ask-batch` does: it takes the same question-set file
+`check` reads (`{"questions": [{"question": "..."}]}`), runs every
+question through the exact pipeline `ask` runs, and prints the
+answers with their sources — so a batch answer can never disagree
+with a one-off `ask` for the same question. A question with no match
+gets the honest miss text, never a guess.
+
+```bash
+tinyrag ask-batch questions.json
+```
+
+```
+3 questions · 2 answered, 1 missed:
+
+1. What is backpropagation?
+   A: Training uses backpropagation: the network compares its prediction to the true answer, computes the error, and updates weights using gradient descent.
+   ↳ neural-networks.txt (chunk 0, confidence 0.09)
+
+2. How does RAG reduce hallucinations?
+   A: RAG reduces hallucinations because answers are grounded in real documents.
+   ↳ rag-explained.txt (chunk 0, confidence 0.29)
+
+3. What is the capital of France?
+   A: I couldn't find anything relevant in your documents.
+```
+
+`-o FILE` writes the same answers as a Markdown report — one
+section per question, source line under every answer, an honest
+"No answer found" line under the misses — ready to hand to someone
+as an FAQ page built from your own documents:
+
+```bash
+tinyrag ask-batch questions.json -o answers.md
+```
+
+```
+wrote 2 answers (1 missed) to answers.md
+```
+
+For scripts, `--json` prints the report (`questions`, `total`,
+`answered`, `missed`) as pure JSON. A missing file exits 1, a
+malformed question set is refused outright (same as `check`), and
+with no index file it says `no index found — run tinyrag index
+<folder> first`.
+
 ## 🏗️ Architecture
 
 ```
@@ -341,17 +395,17 @@ For scripts, `--json` prints the report (`query`, `matches`,
 ## 🧪 Tests
 
 ```bash
-python -m unittest discover -s tests   # 59 tests, all passing
+python -m unittest discover -s tests   # 69 tests, all passing
 ```
 
-Covers: chunking boundaries and overlap, TF-IDF normalization and IDF weighting, cosine sanity, retrieval ranking, IDF-weighted answer picking, honest-miss behavior, index save/load roundtrip, evidence rows (shape, zero-score drop, excerpt truncation, --sources/--json CLI, miss shows no evidence), refresh (no-change no-op, edited/added/deleted files, legacy-index rebuild, missing index/folder, --json report), stats (aggregates, per-doc rows, top terms by chunk count, empty index, largest doc, text/--json CLI, missing index), check (record fills expectations, steady on no change, changed after edit+refresh incl. honest miss, unrecorded never a failure, malformed JSON refused, text/--json CLI, --fail-on-change exit codes, missing file exits 1), search (known-term match, best-first across docs, no-overlap empty result, -k cap, agreement with ask evidence, text/--json CLI, no-match message, missing index), and a full end-to-end run over the sample docs.
+Covers: chunking boundaries and overlap, TF-IDF normalization and IDF weighting, cosine sanity, retrieval ranking, IDF-weighted answer picking, honest-miss behavior, index save/load roundtrip, evidence rows (shape, zero-score drop, excerpt truncation, --sources/--json CLI, miss shows no evidence), refresh (no-change no-op, edited/added/deleted files, legacy-index rebuild, missing index/folder, --json report), stats (aggregates, per-doc rows, top terms by chunk count, empty index, largest doc, text/--json CLI, missing index), check (record fills expectations, steady on no change, changed after edit+refresh incl. honest miss, unrecorded never a failure, malformed JSON refused, text/--json CLI, --fail-on-change exit codes, missing file exits 1), search (known-term match, best-first across docs, no-overlap empty result, -k cap, agreement with ask evidence, text/--json CLI, no-match message, missing index), ask-batch (known-question answer, honest miss, counts math, agreement with ask, Markdown report, text/--json CLI, -o writes file, missing/malformed file exit 1), and a full end-to-end run over the sample docs.
 
 ## 📁 Project structure
 
 ```
 tinyrag/
 ├── tinyrag/
-│   ├── cli.py          # index / ask / refresh / stats / check / search commands
+│   ├── cli.py          # index / ask / refresh / stats / check / search / ask-batch commands
 │   ├── chunker.py      # sliding-window chunking
 │   ├── vectorizer.py   # tokenizer + TF-IDF + cosine, from scratch
 │   ├── retriever.py    # top-k cosine ranking
@@ -361,6 +415,7 @@ tinyrag/
 │   ├── stats.py        # index stats (docs/chunks/vocab/top terms)
 │   ├── check.py        # regression check (saved question set, --record/--fail-on-change)
 │   ├── search.py       # search the index (matching chunks, -k/--json)
+│   ├── ask_batch.py    # answer a whole question set (text/--json/-o Markdown)
 │   ├── store.py        # index save/load (JSON)
 │   └── data/sample_docs/  # 3 demo documents
 ├── tests/test_tinyrag.py
