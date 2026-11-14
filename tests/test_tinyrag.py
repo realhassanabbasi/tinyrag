@@ -11,7 +11,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from tinyrag import __version__, answerer, check, chunker, evidence, retriever, search, stats, store, vectorizer
+from tinyrag import __version__, answerer, ask_batch, check, chunker, evidence, retriever, search, stats, store, vectorizer
 from tinyrag.cli import main
 
 
@@ -219,8 +219,8 @@ class TestAskSources(unittest.TestCase):
         self.assertNotIn("Evidence:", out)
         self.assertIn("couldn't find anything", out)
 
-    def test_version_is_1_5_0(self):
-        self.assertEqual(__version__, "1.5.0")
+    def test_version_is_1_6_0(self):
+        self.assertEqual(__version__, "1.6.0")
 
 
 class TestRefresh(unittest.TestCase):
@@ -669,6 +669,135 @@ class TestSearch(unittest.TestCase):
             main(["search", "alpha",
                   "--index", os.path.join(self.tmp, "nope.json")])
         self.assertIn("run `tinyrag index", buf.getvalue())
+
+
+class TestAskBatch(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.docs = os.path.join(self.tmp, "docs")
+        os.makedirs(self.docs)
+        self.idx = os.path.join(self.tmp, "index.json")
+        self.qs = os.path.join(self.tmp, "questions.json")
+        self._write("a.txt", "alpha beta gamma " * 30)
+        self._write("b.txt", "delta epsilon zeta " * 30)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["index", self.docs, "--out", self.idx])
+        self._write_questions([
+            {"question": "what is alpha beta"},
+            {"question": "what is delta epsilon"},
+            {"question": "quokka wombat"},
+        ])
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def _write(self, name, text):
+        with open(os.path.join(self.docs, name), "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def _write_questions(self, entries):
+        with open(self.qs, "w", encoding="utf-8") as f:
+            json.dump({"questions": entries}, f)
+
+    def _payload(self):
+        questions = check.load_questions(self.qs)
+        return ask_batch.ask_batch_payload(store.load_index(self.idx),
+                                           questions)
+
+    def _run(self, *argv):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["ask-batch", "--index", self.idx, *argv])
+        return buf.getvalue()
+
+    def test_answers_known_question(self):
+        row = self._payload()["questions"][0]
+        self.assertTrue(row["answered"])
+        self.assertEqual(row["doc"], "a.txt")
+        self.assertEqual(row["chunk_id"], 0)
+        self.assertGreater(row["confidence"], 0.0)
+        self.assertIn("alpha beta gamma", row["answer"])
+
+    def test_miss_is_honest(self):
+        row = self._payload()["questions"][2]
+        self.assertFalse(row["answered"])
+        self.assertIsNone(row["doc"])
+        self.assertEqual(row["confidence"], 0.0)
+        self.assertEqual(row["answer"],
+                         "I couldn't find anything relevant in your "
+                         "documents.")
+
+    def test_counts_math(self):
+        payload = self._payload()
+        self.assertEqual(payload["total"], 3)
+        self.assertEqual(payload["answered"], 2)
+        self.assertEqual(payload["missed"], 1)
+
+    def test_agrees_with_ask(self):
+        # Same question, same pipeline: the batch row must equal what
+        # the answerer gives for a one-off ask.
+        index = store.load_index(self.idx)
+        question = "what is alpha beta"
+        q_vec = vectorizer.vectorize(vectorizer.tokenize(question),
+                                     index["idf"])
+        ranked = retriever.retrieve(q_vec, index["vectors"], k=3)
+        single = answerer.answer(set(vectorizer.tokenize(question)),
+                                 index["idf"], ranked, index["chunks"])
+        row = self._payload()["questions"][0]
+        self.assertEqual(row["answer"], single["text"])
+        self.assertEqual(row["doc"], single["doc"])
+        self.assertEqual(row["confidence"], single["confidence"])
+
+    def test_markdown_report(self):
+        md = ask_batch.ask_batch_markdown(self._payload())
+        self.assertIn("# TinyRAG answers", md)
+        self.assertIn("## 1. what is alpha beta", md)
+        self.assertIn("alpha beta gamma", md)
+        self.assertIn("*Source: a.txt (chunk 0,", md)
+        self.assertIn("## 3. quokka wombat", md)
+        self.assertIn("*No answer found in the indexed documents.*", md)
+
+    def test_cli_text_output(self):
+        out = self._run(self.qs)
+        self.assertIn("3 questions · 2 answered, 1 missed:", out)
+        self.assertIn("1. what is alpha beta", out)
+        self.assertIn("alpha beta gamma", out)
+        self.assertIn("↳ a.txt (chunk 0,", out)
+        self.assertIn("I couldn't find anything relevant", out)
+
+    def test_cli_json_schema(self):
+        payload = json.loads(self._run(self.qs, "--json"))
+        self.assertEqual(sorted(payload),
+                         ["answered", "missed", "questions", "total"])
+        self.assertEqual(payload["total"], 3)
+        self.assertEqual(payload["answered"], 2)
+        row = payload["questions"][0]
+        self.assertEqual(sorted(row),
+                         ["answer", "answered", "chunk_id", "confidence",
+                          "doc", "question"])
+
+    def test_cli_writes_markdown_file(self):
+        report = os.path.join(self.tmp, "answers.md")
+        out = self._run(self.qs, "-o", report)
+        self.assertIn(f"wrote 2 answers (1 missed) to {report}", out)
+        with open(report, encoding="utf-8") as f:
+            md = f.read()
+        self.assertIn("# TinyRAG answers", md)
+        self.assertIn("alpha beta gamma", md)
+
+    def test_cli_missing_file_exits_1(self):
+        with self.assertRaises(SystemExit) as ctx:
+            self._run(os.path.join(self.tmp, "nope.json"))
+        self.assertEqual(ctx.exception.code, 1)
+
+    def test_cli_malformed_file_exits_1(self):
+        bad = os.path.join(self.tmp, "bad.json")
+        with open(bad, "w", encoding="utf-8") as f:
+            f.write('{"questions": ["not an object"]}')
+        with self.assertRaises(SystemExit) as ctx:
+            self._run(bad)
+        self.assertEqual(ctx.exception.code, 1)
 
 
 if __name__ == "__main__":
