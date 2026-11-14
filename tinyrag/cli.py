@@ -9,6 +9,8 @@ import sys
 
 from . import __version__
 from .answerer import answer
+from .ask_batch import (ask_batch_markdown, ask_batch_payload,
+                        format_ask_batch)
 from .check import (check_payload, format_check, load_questions,
                     record_expectations, save_questions)
 from .chunker import chunk_folder
@@ -97,6 +99,34 @@ def cmd_check(questions_path: str, index_path: str = DEFAULT_INDEX,
         sys.exit(1)
 
 
+def cmd_ask_batch(questions_path: str, index_path: str = DEFAULT_INDEX,
+                  k: int = 3, out_path: str | None = None,
+                  as_json: bool = False) -> None:
+    if not os.path.exists(questions_path):
+        print(f"no such file: {questions_path}")
+        sys.exit(1)
+    try:
+        questions = load_questions(questions_path)
+    except ValueError as exc:
+        print(str(exc))
+        sys.exit(1)
+    if not os.path.exists(index_path):
+        print("no index found — run `tinyrag index <folder>` first")
+        return
+    payload = ask_batch_payload(load_index(index_path), questions, k=k)
+    if as_json:
+        print(json.dumps(payload, indent=2))
+        return
+    if out_path:
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(ask_batch_markdown(payload))
+        print(f"wrote {payload['answered']} answer"
+              f"{'s' if payload['answered'] != 1 else ''} "
+              f"({payload['missed']} missed) to {out_path}")
+        return
+    print(format_ask_batch(payload))
+
+
 def cmd_search(query: str, index_path: str = DEFAULT_INDEX, k: int = 5,
                as_json: bool = False) -> None:
     if not os.path.exists(index_path):
@@ -181,6 +211,18 @@ def main(argv: list[str] | None = None) -> None:
     ps.add_argument("--json", action="store_true",
                     help="print the matches as JSON")
 
+    pc = sub.add_parser("ask-batch", help="answer a whole question set "
+                        "in one run, optionally as a Markdown report")
+    pc.add_argument("questions", help="JSON question-set file "
+                    "(same format as check)")
+    pc.add_argument("--index", default=DEFAULT_INDEX, help="index file path")
+    pc.add_argument("-k", type=int, default=3,
+                    help="chunks to consider per question")
+    pc.add_argument("-o", default=None, metavar="FILE",
+                    help="write the answers as a Markdown report")
+    pc.add_argument("--json", action="store_true",
+                    help="print the answers as JSON")
+
     pc = sub.add_parser("check", help="re-answer a saved question set, "
                         "flag answers that moved")
     pc.add_argument("questions", help="JSON question-set file")
@@ -207,6 +249,9 @@ def main(argv: list[str] | None = None) -> None:
     elif args.cmd == "check":
         cmd_check(args.questions, args.index, args.json, args.record,
                   args.fail_on_change)
+    elif args.cmd == "ask-batch":
+        cmd_ask_batch(args.questions, args.index, args.k, args.o,
+                      args.json)
 
 
 if __name__ == "__main__":
