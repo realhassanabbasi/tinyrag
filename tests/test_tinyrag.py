@@ -11,7 +11,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from tinyrag import __version__, answerer, ask_batch, check, chunker, evidence, retriever, search, stats, store, vectorizer
+from tinyrag import __version__, answerer, ask_batch, check, chunker, compare, evidence, retriever, search, stats, store, vectorizer
 from tinyrag.cli import main
 
 
@@ -219,8 +219,8 @@ class TestAskSources(unittest.TestCase):
         self.assertNotIn("Evidence:", out)
         self.assertIn("couldn't find anything", out)
 
-    def test_version_is_1_6_0(self):
-        self.assertEqual(__version__, "1.6.0")
+    def test_version_is_1_7_0(self):
+        self.assertEqual(__version__, "1.7.0")
 
 
 class TestRefresh(unittest.TestCase):
@@ -785,6 +785,208 @@ class TestAskBatch(unittest.TestCase):
             md = f.read()
         self.assertIn("# TinyRAG answers", md)
         self.assertIn("alpha beta gamma", md)
+
+    def test_cli_missing_file_exits_1(self):
+        with self.assertRaises(SystemExit) as ctx:
+            self._run(os.path.join(self.tmp, "nope.json"))
+        self.assertEqual(ctx.exception.code, 1)
+
+    def test_cli_malformed_file_exits_1(self):
+        bad = os.path.join(self.tmp, "bad.json")
+        with open(bad, "w", encoding="utf-8") as f:
+            f.write('{"questions": ["not an object"]}')
+        with self.assertRaises(SystemExit) as ctx:
+            self._run(bad)
+        self.assertEqual(ctx.exception.code, 1)
+
+
+class TestCompare(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.docs_a = os.path.join(self.tmp, "docs_a")
+        self.docs_b = os.path.join(self.tmp, "docs_b")
+        os.makedirs(self.docs_a)
+        os.makedirs(self.docs_b)
+        self.idx_a = os.path.join(self.tmp, "index_a.json")
+        self.idx_b = os.path.join(self.tmp, "index_b.json")
+        self.qs = os.path.join(self.tmp, "questions.json")
+        self._write(self.docs_a, "a.txt",
+                    "Alpha is first. Beta is second. "
+                    "Wombats dig burrows.")
+        self._write(self.docs_a, "b.txt",
+                    "Rivers flow to the sea. "
+                    "Mountains rise above the clouds.")
+        self._write(self.docs_b, "a.txt",
+                    "Alpha is first. Beta is second. "
+                    "Alpha beta together.")
+        self._write(self.docs_b, "b.txt",
+                    "Rivers flow to the sea. "
+                    "Mountains rise above the clouds. "
+                    "Quokkas are small marsupials.")
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["index", self.docs_a, "--out", self.idx_a])
+            main(["index", self.docs_b, "--out", self.idx_b])
+        self._write_questions([
+            {"question": "what is alpha beta"},
+            {"question": "where does the river flow"},
+            {"question": "what do wombats dig"},
+            {"question": "what are quokkas"},
+            {"question": "zebra xylophone"},
+        ])
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def _write(self, folder, name, text):
+        with open(os.path.join(folder, name), "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def _write_questions(self, entries):
+        with open(self.qs, "w", encoding="utf-8") as f:
+            json.dump({"questions": entries}, f)
+
+    def _payload(self):
+        questions = check.load_questions(self.qs)
+        return compare.compare_payload(store.load_index(self.idx_a),
+                                       store.load_index(self.idx_b),
+                                       questions)
+
+    def _run(self, *argv):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["compare", self.idx_a, self.idx_b, *argv])
+        return buf.getvalue()
+
+    def test_changed_answer_same_doc(self):
+        row = self._payload()["questions"][0]
+        self.assertEqual(row["status"], "changed")
+        self.assertEqual(row["doc_a"], "a.txt")
+        self.assertEqual(row["doc_b"], "a.txt")
+        self.assertEqual(row["answer_a"], "Alpha is first.")
+        self.assertEqual(row["answer_b"], "Alpha beta together.")
+
+    def test_same_answer(self):
+        row = self._payload()["questions"][1]
+        self.assertEqual(row["status"], "same")
+        self.assertEqual(row["answer_a"], row["answer_b"])
+        self.assertEqual(row["doc_a"], "b.txt")
+        self.assertEqual(row["doc_b"], "b.txt")
+
+    def test_lost_answer(self):
+        row = self._payload()["questions"][2]
+        self.assertEqual(row["status"], "lost-answer")
+        self.assertEqual(row["answer_a"], "Wombats dig burrows.")
+        self.assertIsNone(row["doc_b"])
+
+    def test_new_answer(self):
+        row = self._payload()["questions"][3]
+        self.assertEqual(row["status"], "new-answer")
+        self.assertIsNone(row["doc_a"])
+        self.assertEqual(row["answer_b"],
+                         "Quokkas are small marsupials.")
+
+    def test_still_missed(self):
+        row = self._payload()["questions"][4]
+        self.assertEqual(row["status"], "still-missed")
+        self.assertIsNone(row["doc_a"])
+        self.assertIsNone(row["doc_b"])
+
+    def test_moved_answer(self):
+        # Same question, answered from a different document in B.
+        docs_c = os.path.join(self.tmp, "docs_c")
+        os.makedirs(docs_c)
+        self._write(docs_c, "a.txt", "Gamma is third.")
+        self._write(docs_c, "b.txt", "Alpha is first. Beta is second.")
+        idx_c = os.path.join(self.tmp, "index_c.json")
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["index", docs_c, "--out", idx_c])
+        payload = compare.compare_payload(
+            store.load_index(self.idx_a), store.load_index(idx_c),
+            [{"question": "what is alpha beta"}])
+        row = payload["questions"][0]
+        self.assertEqual(row["status"], "moved")
+        self.assertEqual(row["doc_a"], "a.txt")
+        self.assertEqual(row["doc_b"], "b.txt")
+
+    def test_counts_math(self):
+        payload = self._payload()
+        self.assertEqual(payload["total"], 5)
+        self.assertEqual(payload["same"], 1)
+        self.assertEqual(payload["changed"], 1)
+        self.assertEqual(payload["moved"], 0)
+        self.assertEqual(payload["new_answer"], 1)
+        self.assertEqual(payload["lost_answer"], 1)
+        self.assertEqual(payload["still_missed"], 1)
+
+    def test_agrees_with_ask(self):
+        # Each side of a row must equal what ask_one gives on that index.
+        index_a = store.load_index(self.idx_a)
+        index_b = store.load_index(self.idx_b)
+        row = self._payload()["questions"][0]
+        a = ask_batch.ask_one(index_a, "what is alpha beta")
+        b = ask_batch.ask_one(index_b, "what is alpha beta")
+        self.assertEqual(row["answer_a"], a["answer"])
+        self.assertEqual(row["answer_b"], b["answer"])
+        self.assertEqual(row["doc_a"], a["doc"])
+        self.assertEqual(row["doc_b"], b["doc"])
+
+    def test_markdown_report(self):
+        md = compare.compare_markdown(self._payload())
+        self.assertIn("# TinyRAG index comparison", md)
+        self.assertIn("## 1. what is alpha beta (changed)", md)
+        self.assertIn("**Before:** Alpha is first.", md)
+        self.assertIn("**After:** Alpha beta together.", md)
+        self.assertIn("*Source: a.txt (confidence", md)
+        self.assertIn("## 4. what are quokkas (new-answer)", md)
+        self.assertIn("*No answer found in the first index.*", md)
+        self.assertIn("## 5. zebra xylophone (still-missed)", md)
+        self.assertIn("*No answer found in the second index.*", md)
+
+    def test_cli_text_output(self):
+        out = self._run(self.qs)
+        self.assertIn("5 questions · 1 same, 1 changed, 1 new-answer, "
+                      "1 lost-answer, 1 still-missed:", out)
+        self.assertIn("1. what is alpha beta [changed]", out)
+        self.assertIn("   A: Alpha is first.", out)
+        self.assertIn("   B: Alpha beta together.", out)
+        self.assertIn("      ↳ a.txt (confidence", out)
+        self.assertIn("4. what are quokkas [new-answer]", out)
+
+    def test_cli_json_schema(self):
+        payload = json.loads(self._run(self.qs, "--json"))
+        self.assertEqual(sorted(payload),
+                         ["changed", "lost_answer", "moved", "new_answer",
+                          "questions", "same", "still_missed", "total"])
+        self.assertEqual(payload["total"], 5)
+        self.assertEqual(payload["changed"], 1)
+        row = payload["questions"][0]
+        self.assertEqual(sorted(row),
+                         ["answer_a", "answer_b", "confidence_a",
+                          "confidence_b", "doc_a", "doc_b", "question",
+                          "status"])
+
+    def test_cli_writes_markdown_file(self):
+        report = os.path.join(self.tmp, "comparison.md")
+        out = self._run(self.qs, "-o", report)
+        self.assertIn(f"wrote comparison of 5 questions to {report}", out)
+        with open(report, encoding="utf-8") as f:
+            md = f.read()
+        self.assertIn("# TinyRAG index comparison", md)
+        self.assertIn("Alpha beta together.", md)
+
+    def test_cli_missing_index_says_index_first(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["compare", os.path.join(self.tmp, "nope.json"),
+                  self.idx_b, self.qs])
+        self.assertIn("no first index found at", buf.getvalue())
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["compare", self.idx_a,
+                  os.path.join(self.tmp, "nope.json"), self.qs])
+        self.assertIn("no second index found at", buf.getvalue())
 
     def test_cli_missing_file_exits_1(self):
         with self.assertRaises(SystemExit) as ctx:
