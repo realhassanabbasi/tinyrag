@@ -11,7 +11,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from tinyrag import __version__, answerer, ask_batch, check, chunker, compare, evidence, retriever, search, stats, store, vectorizer
+from tinyrag import __version__, answerer, ask_batch, check, chunker, compare, evidence, merge, retriever, search, stats, store, vectorizer
 from tinyrag.cli import main
 
 
@@ -219,8 +219,8 @@ class TestAskSources(unittest.TestCase):
         self.assertNotIn("Evidence:", out)
         self.assertIn("couldn't find anything", out)
 
-    def test_version_is_1_7_0(self):
-        self.assertEqual(__version__, "1.7.0")
+    def test_version_is_1_8_0(self):
+        self.assertEqual(__version__, "1.8.0")
 
 
 class TestRefresh(unittest.TestCase):
@@ -1000,6 +1000,172 @@ class TestCompare(unittest.TestCase):
         with self.assertRaises(SystemExit) as ctx:
             self._run(bad)
         self.assertEqual(ctx.exception.code, 1)
+
+
+class TestMerge(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.docs_a = os.path.join(self.tmp, "docs_a")
+        self.docs_b = os.path.join(self.tmp, "docs_b")
+        self.docs_c = os.path.join(self.tmp, "docs_c")
+        for d in (self.docs_a, self.docs_b, self.docs_c):
+            os.makedirs(d)
+        self.idx_a = os.path.join(self.tmp, "index_a.json")
+        self.idx_b = os.path.join(self.tmp, "index_b.json")
+        self.idx_dup = os.path.join(self.tmp, "index_dup.json")
+        self.idx_c = os.path.join(self.tmp, "index_c.json")
+        self._write(self.docs_a, "a.txt",
+                    "Alpha is first. Beta is second. "
+                    "Wombats dig burrows.")
+        self._write(self.docs_a, "b.txt",
+                    "Rivers flow to the sea. "
+                    "Mountains rise above the clouds.")
+        self._write(self.docs_b, "c.txt",
+                    "Quokkas are small marsupials. "
+                    "Koalas sleep in trees.")
+        self._write(self.docs_b, "d.txt",
+                    "Deserts are dry. Oceans are deep.")
+        # Same doc name as A, different text — a conflict.
+        self._write(self.docs_c, "a.txt",
+                    "Alpha is changed. Beta is gone.")
+        self._write(self.docs_c, "e.txt",
+                    "Eagles soar high. Falcons dive fast.")
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["index", self.docs_a, "--out", self.idx_a])
+            main(["index", self.docs_b, "--out", self.idx_b])
+            main(["index", self.docs_a, "--out", self.idx_dup])
+            main(["index", self.docs_c, "--out", self.idx_c])
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def _write(self, folder, name, text):
+        with open(os.path.join(folder, name), "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def _merge(self, a=None, b=None, out=None):
+        out = out or os.path.join(self.tmp, "merged.json")
+        report = merge.merge_indexes(
+            store.load_index(a or self.idx_a),
+            store.load_index(b or self.idx_b), out)
+        return report, store.load_index(out)
+
+    def _run(self, *argv):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["merge", self.idx_a, self.idx_b, *argv])
+        return buf.getvalue()
+
+    def test_disjoint_merge_counts(self):
+        report, _ = self._merge()
+        self.assertEqual(report["docs_a"], 2)
+        self.assertEqual(report["chunks_a"], 2)
+        self.assertEqual(report["docs_b"], 2)
+        self.assertEqual(report["chunks_b"], 2)
+        self.assertEqual(report["docs"], 4)
+        self.assertEqual(report["chunks"], 4)
+        self.assertEqual(report["duplicates_skipped"], 0)
+        self.assertEqual(report["conflicts_skipped"], 0)
+        self.assertEqual(report["conflict_docs"], [])
+
+    def test_merged_answers_from_both_sides(self):
+        _, merged = self._merge()
+        a = ask_batch.ask_one(merged, "what do wombats dig")
+        self.assertEqual(a["answer"], "Wombats dig burrows.")
+        self.assertEqual(a["doc"], "a.txt")
+        b = ask_batch.ask_one(merged, "what are quokkas")
+        self.assertEqual(b["answer"], "Quokkas are small marsupials.")
+        self.assertEqual(b["doc"], "c.txt")
+
+    def test_merged_agrees_with_ask(self):
+        _, merged = self._merge()
+        index_a = store.load_index(self.idx_a)
+        index_b = store.load_index(self.idx_b)
+        for question in ("what do wombats dig", "what are quokkas"):
+            want = ask_batch.ask_one(
+                index_a if "wombats" in question else index_b, question)
+            got = ask_batch.ask_one(merged, question)
+            self.assertEqual(got["answer"], want["answer"])
+            self.assertEqual(got["doc"], want["doc"])
+
+    def test_idf_rebuilt_over_merged_corpus(self):
+        _, merged = self._merge()
+        self.assertIn("quokkas", merged["idf"])
+        self.assertIn("wombats", merged["idf"])
+        index_a = store.load_index(self.idx_a)
+        self.assertNotIn("quokkas", index_a["idf"])
+        self.assertGreater(len(merged["idf"]), len(index_a["idf"]))
+
+    def test_exact_duplicate_skipped(self):
+        report, merged = self._merge(b=self.idx_dup)
+        self.assertEqual(report["docs"], 2)
+        self.assertEqual(report["chunks"], 2)
+        self.assertEqual(report["duplicates_skipped"], 2)
+        self.assertEqual(report["conflicts_skipped"], 0)
+        self.assertEqual(len(merged["chunks"]), 2)
+
+    def test_conflict_keeps_first(self):
+        report, merged = self._merge(b=self.idx_c)
+        self.assertEqual(report["docs"], 3)
+        self.assertEqual(report["chunks"], 3)
+        self.assertEqual(report["duplicates_skipped"], 0)
+        self.assertEqual(report["conflicts_skipped"], 1)
+        self.assertEqual(report["conflict_docs"], ["a.txt"])
+        kept = [r for r in merged["chunks"]
+                if r["doc"] == "a.txt" and r["chunk_id"] == 0][0]
+        self.assertEqual(kept["text"], "Alpha is first. Beta is second. "
+                                       "Wombats dig burrows.")
+
+    def test_meta_merged_first_wins(self):
+        _, merged = self._merge()
+        self.assertEqual(sorted(merged["meta"]["docs"]),
+                         ["a.txt", "b.txt", "c.txt", "d.txt"])
+
+    def test_cli_text_output(self):
+        out_path = os.path.join(self.tmp, "merged.json")
+        out = self._run("-o", out_path)
+        self.assertIn("merged 2 + 2 documents, 2 + 2 chunks "
+                      "→ 4 documents, 4 chunks", out)
+        self.assertIn(f"wrote merged index to {out_path}", out)
+        self.assertTrue(os.path.exists(out_path))
+
+    def test_cli_json_schema(self):
+        out_path = os.path.join(self.tmp, "merged.json")
+        payload = json.loads(self._run("-o", out_path, "--json"))
+        self.assertEqual(sorted(payload),
+                         ["chunks", "chunks_a", "chunks_b", "conflict_docs",
+                          "conflicts_skipped", "docs", "docs_a", "docs_b",
+                          "duplicates_skipped", "out"])
+        self.assertEqual(payload["docs"], 4)
+        self.assertEqual(payload["chunks"], 4)
+        self.assertEqual(payload["out"], out_path)
+        self.assertTrue(os.path.exists(out_path))
+
+    def test_cli_missing_index_says_index_first(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["merge", os.path.join(self.tmp, "nope.json"),
+                  self.idx_b, "-o", os.path.join(self.tmp, "m.json")])
+        self.assertIn("no first index found at", buf.getvalue())
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["merge", self.idx_a,
+                  os.path.join(self.tmp, "nope.json"),
+                  "-o", os.path.join(self.tmp, "m.json")])
+        self.assertIn("no second index found at", buf.getvalue())
+
+    def test_cli_existing_output_refuses_without_force(self):
+        out_path = os.path.join(self.tmp, "merged.json")
+        self._run("-o", out_path)
+        with open(out_path, encoding="utf-8") as f:
+            before = f.read()
+        out = self._run("-o", out_path)
+        self.assertIn("already exists", out)
+        with open(out_path, encoding="utf-8") as f:
+            self.assertEqual(f.read(), before)
+        out = self._run("-o", out_path, "--force")
+        self.assertIn(f"wrote merged index to {out_path}", out)
 
 
 if __name__ == "__main__":
