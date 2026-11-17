@@ -16,6 +16,7 @@ from .check import (check_payload, format_check, load_questions,
 from .chunker import chunk_folder
 from .compare import (compare_markdown, compare_payload, format_compare)
 from .evidence import evidence_payload, format_evidence
+from .merge import DEFAULT_OUT, format_merge, merge_indexes
 from .refresh import format_refresh, refresh_index, scan_folder
 from .retriever import retrieve
 from .search import format_search, search_payload
@@ -158,6 +159,26 @@ def cmd_compare(index_a_path: str, index_b_path: str, questions_path: str,
     print(format_compare(payload))
 
 
+def cmd_merge(index_a_path: str, index_b_path: str,
+              out_path: str = DEFAULT_OUT, as_json: bool = False,
+              force: bool = False) -> None:
+    for label, path in (("first", index_a_path), ("second", index_b_path)):
+        if not os.path.exists(path):
+            print(f"no {label} index found at {path} — run "
+                  "`tinyrag index <folder>` first")
+            return
+    if not force and os.path.exists(out_path):
+        print(f"{out_path} already exists — pass -o FILE or --force "
+              "to overwrite")
+        return
+    report = merge_indexes(load_index(index_a_path),
+                           load_index(index_b_path), out_path)
+    if as_json:
+        print(json.dumps(report, indent=2))
+        return
+    print(format_merge(report))
+
+
 def cmd_search(query: str, index_path: str = DEFAULT_INDEX, k: int = 5,
                as_json: bool = False) -> None:
     if not os.path.exists(index_path):
@@ -267,6 +288,17 @@ def main(argv: list[str] | None = None) -> None:
     pc.add_argument("--json", action="store_true",
                     help="print the comparison as JSON")
 
+    pc = sub.add_parser("merge", help="combine two indexes into one "
+                        "searchable index")
+    pc.add_argument("index_a", help="first index file")
+    pc.add_argument("index_b", help="second index file")
+    pc.add_argument("-o", default=DEFAULT_OUT, metavar="FILE",
+                    help="merged index file (default merged.json)")
+    pc.add_argument("--json", action="store_true",
+                    help="print the merge report as JSON")
+    pc.add_argument("--force", action="store_true",
+                    help="overwrite the output file if it exists")
+
     pc = sub.add_parser("check", help="re-answer a saved question set, "
                         "flag answers that moved")
     pc.add_argument("questions", help="JSON question-set file")
@@ -299,6 +331,9 @@ def main(argv: list[str] | None = None) -> None:
     elif args.cmd == "compare":
         cmd_compare(args.index_a, args.index_b, args.questions, args.k,
                     args.o, args.json)
+    elif args.cmd == "merge":
+        cmd_merge(args.index_a, args.index_b, args.o, args.json,
+                  args.force)
 
 
 if __name__ == "__main__":
