@@ -15,6 +15,7 @@ from .check import (check_payload, format_check, load_questions,
                     record_expectations, save_questions)
 from .chunker import chunk_folder
 from .compare import (compare_markdown, compare_payload, format_compare)
+from .diff import diff_indexes, format_diff
 from .evidence import evidence_payload, format_evidence
 from .merge import DEFAULT_OUT, format_merge, merge_indexes
 from .refresh import format_refresh, refresh_index, scan_folder
@@ -159,6 +160,21 @@ def cmd_compare(index_a_path: str, index_b_path: str, questions_path: str,
     print(format_compare(payload))
 
 
+def cmd_diff(index_a_path: str, index_b_path: str,
+             as_json: bool = False) -> None:
+    for label, path in (("first", index_a_path), ("second", index_b_path)):
+        if not os.path.exists(path):
+            print(f"no {label} index found at {path} — run "
+                  "`tinyrag index <folder>` first")
+            return
+    payload = diff_indexes(load_index(index_a_path),
+                           load_index(index_b_path))
+    if as_json:
+        print(json.dumps(payload, indent=2))
+        return
+    print(format_diff(payload))
+
+
 def cmd_merge(index_a_path: str, index_b_path: str,
               out_path: str = DEFAULT_OUT, as_json: bool = False,
               force: bool = False) -> None:
@@ -299,6 +315,13 @@ def main(argv: list[str] | None = None) -> None:
     pc.add_argument("--force", action="store_true",
                     help="overwrite the output file if it exists")
 
+    pc = sub.add_parser("diff", help="show what content changed "
+                        "between two indexes")
+    pc.add_argument("index_a", help="first index file")
+    pc.add_argument("index_b", help="second index file")
+    pc.add_argument("--json", action="store_true",
+                    help="print the diff as JSON")
+
     pc = sub.add_parser("check", help="re-answer a saved question set, "
                         "flag answers that moved")
     pc.add_argument("questions", help="JSON question-set file")
@@ -334,6 +357,8 @@ def main(argv: list[str] | None = None) -> None:
     elif args.cmd == "merge":
         cmd_merge(args.index_a, args.index_b, args.o, args.json,
                   args.force)
+    elif args.cmd == "diff":
+        cmd_diff(args.index_a, args.index_b, args.json)
 
 
 if __name__ == "__main__":
