@@ -11,7 +11,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from tinyrag import __version__, answerer, ask_batch, check, chunker, compare, evidence, merge, retriever, search, stats, store, vectorizer
+from tinyrag import __version__, answerer, ask_batch, check, chunker, compare, diff, evidence, merge, retriever, search, stats, store, vectorizer
 from tinyrag.cli import main
 
 
@@ -219,8 +219,8 @@ class TestAskSources(unittest.TestCase):
         self.assertNotIn("Evidence:", out)
         self.assertIn("couldn't find anything", out)
 
-    def test_version_is_1_8_0(self):
-        self.assertEqual(__version__, "1.8.0")
+    def test_version_is_1_9_0(self):
+        self.assertEqual(__version__, "1.9.0")
 
 
 class TestRefresh(unittest.TestCase):
@@ -1166,6 +1166,174 @@ class TestMerge(unittest.TestCase):
             self.assertEqual(f.read(), before)
         out = self._run("-o", out_path, "--force")
         self.assertIn(f"wrote merged index to {out_path}", out)
+
+
+class TestDiff(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.docs_a = os.path.join(self.tmp, "docs_a")
+        self.docs_b = os.path.join(self.tmp, "docs_b")
+        self.docs_c = os.path.join(self.tmp, "docs_c")
+        for d in (self.docs_a, self.docs_b, self.docs_c):
+            os.makedirs(d)
+        self.idx_a = os.path.join(self.tmp, "index_a.json")
+        self.idx_b = os.path.join(self.tmp, "index_b.json")
+        self.idx_c = os.path.join(self.tmp, "index_c.json")
+        self._write(self.docs_a, "a.txt",
+                    "Alpha is first. Beta is second. "
+                    "Wombats dig burrows.")
+        self._write(self.docs_a, "b.txt",
+                    "Rivers flow to the sea. "
+                    "Mountains rise above the clouds.")
+        self._write(self.docs_b, "c.txt",
+                    "Quokkas are small marsupials. "
+                    "Koalas sleep in trees.")
+        self._write(self.docs_b, "d.txt",
+                    "Deserts are dry. Oceans are deep.")
+        # Same doc name as A, different text — a changed doc.
+        self._write(self.docs_c, "a.txt",
+                    "Alpha is changed. Beta is gone.")
+        self._write(self.docs_c, "e.txt",
+                    "Eagles soar high. Falcons dive fast.")
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["index", self.docs_a, "--out", self.idx_a])
+            main(["index", self.docs_b, "--out", self.idx_b])
+            main(["index", self.docs_c, "--out", self.idx_c])
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def _write(self, folder, name, text):
+        with open(os.path.join(folder, name), "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def _index(self, chunks):
+        return {"chunks": chunks}
+
+    def _run(self, *argv):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["diff", self.idx_a, self.idx_b, *argv])
+        return buf.getvalue()
+
+    def test_identical_indexes(self):
+        index = store.load_index(self.idx_a)
+        payload = diff.diff_indexes(index, index)
+        self.assertEqual(payload["docs_a"], 2)
+        self.assertEqual(payload["docs_b"], 2)
+        self.assertEqual(payload["shared"], 2)
+        self.assertEqual(payload["only_a"], [])
+        self.assertEqual(payload["only_b"], [])
+        self.assertEqual(payload["identical"], ["a.txt", "b.txt"])
+        self.assertEqual(payload["changed"], [])
+
+    def test_only_in_each_side(self):
+        payload = diff.diff_indexes(store.load_index(self.idx_a),
+                                    store.load_index(self.idx_b))
+        self.assertEqual(payload["only_a"], ["a.txt", "b.txt"])
+        self.assertEqual(payload["only_b"], ["c.txt", "d.txt"])
+        self.assertEqual(payload["identical"], [])
+        self.assertEqual(payload["shared"], 0)
+        self.assertEqual(payload["changed"], [])
+
+    def test_changed_doc_chunk_math(self):
+        a = self._index([
+            {"doc": "a.txt", "chunk_id": 0, "text": "alpha beta"},
+            {"doc": "a.txt", "chunk_id": 1, "text": "gamma delta"},
+        ])
+        b = self._index([
+            {"doc": "a.txt", "chunk_id": 0, "text": "alpha beta"},
+            {"doc": "a.txt", "chunk_id": 1, "text": "gamma CHANGED"},
+            {"doc": "a.txt", "chunk_id": 2, "text": "epsilon zeta"},
+        ])
+        payload = diff.diff_indexes(a, b)
+        self.assertEqual(payload["identical"], [])
+        self.assertEqual(len(payload["changed"]), 1)
+        row = payload["changed"][0]
+        self.assertEqual(row["doc"], "a.txt")
+        self.assertEqual(row["chunks_a"], 2)
+        self.assertEqual(row["chunks_b"], 3)
+        self.assertEqual(row["added"], [2])
+        self.assertEqual(row["removed"], [])
+        self.assertEqual(row["changed"], [1])
+
+    def test_removed_chunk(self):
+        a = self._index([
+            {"doc": "a.txt", "chunk_id": 0, "text": "alpha beta"},
+            {"doc": "a.txt", "chunk_id": 1, "text": "gamma delta"},
+        ])
+        b = self._index([
+            {"doc": "a.txt", "chunk_id": 0, "text": "alpha beta"},
+        ])
+        row = diff.diff_indexes(a, b)["changed"][0]
+        self.assertEqual(row["added"], [])
+        self.assertEqual(row["removed"], [1])
+        self.assertEqual(row["changed"], [])
+
+    def test_empty_indexes(self):
+        payload = diff.diff_indexes(self._index([]), self._index([]))
+        self.assertEqual(payload["docs_a"], 0)
+        self.assertEqual(payload["chunks_a"], 0)
+        self.assertEqual(payload["shared"], 0)
+        self.assertIn("no differences", diff.format_diff(payload))
+
+    def test_format_text_changed_doc(self):
+        payload = diff.diff_indexes(store.load_index(self.idx_a),
+                                    store.load_index(self.idx_c))
+        out = diff.format_diff(payload)
+        self.assertIn("A: 2 documents, 2 chunks", out)
+        self.assertIn("B: 2 documents, 2 chunks", out)
+        self.assertIn("Only in A: 1 (b.txt)", out)
+        self.assertIn("Only in B: 1 (e.txt)", out)
+        self.assertIn("Identical: 0", out)
+        self.assertIn("Changed: 1", out)
+        self.assertIn("a.txt — 1 chunk → 1 chunk "
+                      "(0 added, 0 removed, 1 changed)", out)
+
+    def test_cli_text_output(self):
+        out = self._run()
+        self.assertIn("A: 2 documents, 2 chunks", out)
+        self.assertIn("B: 2 documents, 2 chunks", out)
+        self.assertIn("Only in A: 2 (a.txt, b.txt)", out)
+        self.assertIn("Only in B: 2 (c.txt, d.txt)", out)
+        self.assertIn("Identical: 0", out)
+        self.assertIn("Changed: 0", out)
+        self.assertNotIn("no differences", out)  # disjoint ≠ identical
+
+    def test_cli_json_schema(self):
+        payload = json.loads(self._run("--json"))
+        self.assertEqual(sorted(payload),
+                         ["changed", "chunks_a", "chunks_b", "docs_a",
+                          "docs_b", "identical", "only_a", "only_b",
+                          "shared"])
+        self.assertEqual(payload["docs_a"], 2)
+        self.assertEqual(payload["docs_b"], 2)
+        self.assertEqual(payload["only_a"], ["a.txt", "b.txt"])
+
+    def test_cli_missing_index_says_index_first(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["diff", os.path.join(self.tmp, "nope.json"),
+                  self.idx_b])
+        self.assertIn("no first index found at", buf.getvalue())
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["diff", self.idx_a,
+                  os.path.join(self.tmp, "nope.json")])
+        self.assertIn("no second index found at", buf.getvalue())
+
+    def test_diff_predicts_merge_conflicts(self):
+        # A changed doc in diff is exactly the doc merge resolves
+        # first-wins — diff is the pre-merge check.
+        payload = diff.diff_indexes(store.load_index(self.idx_a),
+                                    store.load_index(self.idx_c))
+        changed_docs = [row["doc"] for row in payload["changed"]]
+        out = os.path.join(self.tmp, "merged.json")
+        report = merge.merge_indexes(store.load_index(self.idx_a),
+                                     store.load_index(self.idx_c), out)
+        self.assertEqual(changed_docs, report["conflict_docs"])
+        self.assertEqual(report["conflicts_skipped"], 1)
 
 
 if __name__ == "__main__":
