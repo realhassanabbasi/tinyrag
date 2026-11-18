@@ -2,7 +2,7 @@
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-95%20passing-brightgreen?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-105%20passing-brightgreen?style=flat-square)
 ![Deps](https://img.shields.io/badge/dependencies-zero-blue?style=flat-square)
 [![Live demo](https://img.shields.io/badge/demo-live%20showcase-0D9488?style=flat-square)](https://realhassanabbasi.github.io/tinyrag/)
 
@@ -25,6 +25,7 @@ TinyRAG is a minimal Retrieval-Augmented Generation pipeline built **from scratc
 - **Answer a whole question set** — `ask-batch` runs every question in a `check` file through the same `ask` pipeline and prints the answers with sources, or writes them as a Markdown FAQ with `-o`; `--json` prints them for scripts
 - **Compare two indexes** — `compare` answers the same question set on an old index and a new one and reports what changed: same, changed text, moved to another document, newly answered, lost, or still unanswered; `-o` writes the comparison as a Markdown report, `--json` prints it for scripts
 - **Merge two indexes** — `merge` combines two indexes into one searchable index (notes + docs, v1 + v2) with IDF rebuilt over the merged corpus; exact duplicates are kept once, same-doc conflicts keep the first index's version and name the doc in the report, never silently dropped; `-o` sets the output file (default `merged.json`), `--force` overwrites it
+- **Diff two indexes** — `diff` shows what content changed between two index files, doc by doc: only in A, only in B, identical, or changed (chunk counts plus added/removed/rewritten chunk ids); `--json` prints it for scripts — run it before a merge, since a changed doc is exactly the doc `merge` resolves first-wins
 - **IDF-weighted sentence picking** — rare terms (backpropagation) outrank common ones
 
 ## 🚀 Quickstart
@@ -60,6 +61,9 @@ tinyrag compare index-v1.json index-v2.json questions.json
 
 # combine two indexes into one you can ask across
 tinyrag merge notes.json docs.json -o combined.json
+
+# before merging, see what actually changed between two indexes
+tinyrag diff index-v1.json index-v2.json
 ```
 
 Or run the instant demo (no install needed):
@@ -448,6 +452,39 @@ refused unless you pass `--force`. `--json` prints the merge report
 conflicted docs) as pure JSON. A missing index file names which side
 is missing (`no first index found at ...`).
 
+## 🔍 Diff two indexes
+
+`merge` only reports its conflicts after the fact. `diff` shows them
+before you merge: give it two index files and it compares their
+contents doc by doc — only in A, only in B, identical, or changed,
+with chunk counts plus how many chunks were added, removed, or
+rewritten. A changed doc is exactly the doc `merge` will resolve
+first-wins, so diff is the pre-merge check; between two snapshots of
+the same folder it answers "what did my docs actually change?".
+
+```bash
+tinyrag diff index-v1.json index-v2.json
+```
+
+```
+A: 2 documents, 2 chunks
+B: 3 documents, 3 chunks
+Only in A: 0
+Only in B: 1 (c.txt)
+Identical: 1 (b.txt)
+Changed: 1
+  a.txt — 1 chunk → 1 chunk (0 added, 0 removed, 1 changed)
+```
+
+Here `a.txt` was rewritten between the two snapshots while `b.txt`
+is untouched and `c.txt` is new — and merging these two indexes does
+indeed report one conflict, on `a.txt`. Diff reads only the saved
+chunk records: no re-indexing, no re-scoring. `--json` prints the
+diff (`docs_a`, `chunks_a`, `docs_b`, `chunks_b`, `shared`, the doc
+lists, one row per changed doc with added/removed/changed chunk ids)
+as pure JSON. A missing index file names which side is missing
+(`no first index found at ...`).
+
 ## 🏗️ Architecture
 
 ```
@@ -488,17 +525,17 @@ is missing (`no first index found at ...`).
 ## 🧪 Tests
 
 ```bash
-python -m unittest discover -s tests   # 95 tests, all passing
+python -m unittest discover -s tests   # 105 tests, all passing
 ```
 
-Covers: chunking boundaries and overlap, TF-IDF normalization and IDF weighting, cosine sanity, retrieval ranking, IDF-weighted answer picking, honest-miss behavior, index save/load roundtrip, evidence rows (shape, zero-score drop, excerpt truncation, --sources/--json CLI, miss shows no evidence), refresh (no-change no-op, edited/added/deleted files, legacy-index rebuild, missing index/folder, --json report), stats (aggregates, per-doc rows, top terms by chunk count, empty index, largest doc, text/--json CLI, missing index), check (record fills expectations, steady on no change, changed after edit+refresh incl. honest miss, unrecorded never a failure, malformed JSON refused, text/--json CLI, --fail-on-change exit codes, missing file exits 1), search (known-term match, best-first across docs, no-overlap empty result, -k cap, agreement with ask evidence, text/--json CLI, no-match message, missing index), ask-batch (known-question answer, honest miss, counts math, agreement with ask, Markdown report, text/--json CLI, -o writes file, missing/malformed file exit 1), compare (changed/same/moved/new-answer/lost-answer/still-missed, counts math, agreement with ask on both sides, Markdown report, text/--json CLI, -o writes file, missing index/file, malformed file exit 1), merge (disjoint counts, answers from both sides, agreement with ask, IDF rebuilt over the merged corpus, exact duplicates skipped, conflict keeps first, meta merged, text/--json CLI, missing index, existing output refused without --force), and a full end-to-end run over the sample docs.
+Covers: chunking boundaries and overlap, TF-IDF normalization and IDF weighting, cosine sanity, retrieval ranking, IDF-weighted answer picking, honest-miss behavior, index save/load roundtrip, evidence rows (shape, zero-score drop, excerpt truncation, --sources/--json CLI, miss shows no evidence), refresh (no-change no-op, edited/added/deleted files, legacy-index rebuild, missing index/folder, --json report), stats (aggregates, per-doc rows, top terms by chunk count, empty index, largest doc, text/--json CLI, missing index), check (record fills expectations, steady on no change, changed after edit+refresh incl. honest miss, unrecorded never a failure, malformed JSON refused, text/--json CLI, --fail-on-change exit codes, missing file exits 1), search (known-term match, best-first across docs, no-overlap empty result, -k cap, agreement with ask evidence, text/--json CLI, no-match message, missing index), ask-batch (known-question answer, honest miss, counts math, agreement with ask, Markdown report, text/--json CLI, -o writes file, missing/malformed file exit 1), compare (changed/same/moved/new-answer/lost-answer/still-missed, counts math, agreement with ask on both sides, Markdown report, text/--json CLI, -o writes file, missing index/file, malformed file exit 1), merge (disjoint counts, answers from both sides, agreement with ask, IDF rebuilt over the merged corpus, exact duplicates skipped, conflict keeps first, meta merged, text/--json CLI, missing index, existing output refused without --force), diff (identical indexes, only-in-each-side, changed-doc chunk math incl. added/removed/changed ids, empty indexes, text/--json CLI, missing index, diff predicts merge conflicts), and a full end-to-end run over the sample docs.
 
 ## 📁 Project structure
 
 ```
 tinyrag/
 ├── tinyrag/
-│   ├── cli.py          # index / ask / refresh / stats / check / search / ask-batch / compare / merge commands
+│   ├── cli.py          # index / ask / refresh / stats / check / search / ask-batch / compare / merge / diff commands
 │   ├── chunker.py      # sliding-window chunking
 │   ├── vectorizer.py   # tokenizer + TF-IDF + cosine, from scratch
 │   ├── retriever.py    # top-k cosine ranking
@@ -511,6 +548,7 @@ tinyrag/
 │   ├── ask_batch.py    # answer a whole question set (text/--json/-o Markdown)
 │   ├── compare.py      # compare two indexes on one question set (text/--json/-o Markdown)
 │   ├── merge.py        # merge two indexes into one (dedupe + conflict rules, --json/--force)
+│   ├── diff.py         # diff two indexes' contents (only/identical/changed docs, --json)
 │   ├── store.py        # index save/load (JSON)
 │   └── data/sample_docs/  # 3 demo documents
 ├── tests/test_tinyrag.py
