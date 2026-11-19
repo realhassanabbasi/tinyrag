@@ -7,11 +7,14 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
 import unittest
+import urllib.error
+import urllib.request
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from tinyrag import __version__, answerer, ask_batch, check, chunker, compare, diff, evidence, merge, retriever, search, stats, store, vectorizer
+from tinyrag import __version__, answerer, ask_batch, check, chunker, compare, diff, evidence, merge, retriever, search, serve, stats, store, vectorizer
 from tinyrag.cli import main
 
 
@@ -219,8 +222,8 @@ class TestAskSources(unittest.TestCase):
         self.assertNotIn("Evidence:", out)
         self.assertIn("couldn't find anything", out)
 
-    def test_version_is_1_9_0(self):
-        self.assertEqual(__version__, "1.9.0")
+    def test_version_is_1_10_0(self):
+        self.assertEqual(__version__, "1.10.0")
 
 
 class TestRefresh(unittest.TestCase):
@@ -1334,6 +1337,136 @@ class TestDiff(unittest.TestCase):
                                      store.load_index(self.idx_c), out)
         self.assertEqual(changed_docs, report["conflict_docs"])
         self.assertEqual(report["conflicts_skipped"], 1)
+
+
+class TestServe(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.idx = os.path.join(self.tmp, "index.json")
+        base = os.path.join(os.path.dirname(__file__), "..", "tinyrag",
+                            "data", "sample_docs")
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["index", base, "--out", self.idx])
+        self.index = store.load_index(self.idx)
+        # A real server on localhost, ephemeral port, in a thread.
+        self.server = serve.make_server(self.index, 0)
+        self.thread = threading.Thread(target=self.server.serve_forever,
+                                       daemon=True)
+        self.thread.start()
+        host, port = self.server.server_address
+        self.base_url = f"http://{host}:{port}"
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        shutil.rmtree(self.tmp)
+
+    def _get(self, path):
+        try:
+            with urllib.request.urlopen(self.base_url + path) as res:
+                return res.status, res.read().decode("utf-8"), \
+                    res.headers.get_content_type()
+        except urllib.error.HTTPError as exc:
+            return exc.code, exc.read().decode("utf-8"), \
+                exc.headers.get_content_type()
+
+    def _post(self, path, raw):
+        req = urllib.request.Request(
+            self.base_url + path, data=raw.encode("utf-8"),
+            headers={"Content-Type": "application/json"}, method="POST")
+        try:
+            with urllib.request.urlopen(req) as res:
+                return res.status, json.loads(res.read())
+        except urllib.error.HTTPError as exc:
+            return exc.code, json.loads(exc.read())
+
+    def test_payload_agrees_with_cli(self):
+        # The browser answer must equal the terminal answer — same pipeline.
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["ask", "what is backpropagation", "--index", self.idx,
+                  "--json"])
+        cli = json.loads(buf.getvalue())
+        payload = serve.ask_payload(self.index, "what is backpropagation")
+        self.assertEqual(payload["answer"], cli["answer"])
+        self.assertEqual(payload["doc"], cli["doc"])
+        self.assertEqual(payload["confidence"], cli["confidence"])
+        self.assertEqual(payload["sources"], cli["sources"])
+
+    def test_payload_miss_shape(self):
+        payload = serve.ask_payload(self.index,
+                                    "what is the capital of france")
+        self.assertEqual(payload["doc"], None)
+        self.assertEqual(payload["chunk_id"], None)
+        self.assertEqual(payload["confidence"], 0.0)
+        self.assertEqual(payload["sources"], [])
+        self.assertIn("couldn't find", payload["answer"])
+
+    def test_page_has_ask_form_and_no_external_assets(self):
+        html = serve.render_page(3, 3)
+        self.assertIn("<form", html)
+        self.assertIn('id="q"', html)
+        self.assertIn('fetch("/ask"', html)
+        self.assertIn("3 documents", html)
+        self.assertIn("3 chunks", html)
+        self.assertNotIn('src="http', html)
+        self.assertNotIn('href="http', html)
+        self.assertNotIn("//cdn", html)
+
+    def test_get_root_serves_page(self):
+        status, body, ctype = self._get("/")
+        self.assertEqual(status, 200)
+        self.assertEqual(ctype, "text/html")
+        self.assertIn("TinyRAG", body)
+        self.assertIn('id="q"', body)
+        self.assertIn("3 documents", body)
+
+    def test_health_schema(self):
+        status, body, ctype = self._get("/health")
+        self.assertEqual(status, 200)
+        self.assertEqual(ctype, "application/json")
+        payload = json.loads(body)
+        self.assertEqual(payload, {"ok": True, "docs": 3, "chunks": 3,
+                                   "version": "1.10.0"})
+
+    def test_post_ask_round_trip(self):
+        status, payload = self._post(
+            "/ask", json.dumps({"question": "what is backpropagation"}))
+        self.assertEqual(status, 200)
+        self.assertIn("backprop", payload["answer"].lower())
+        self.assertEqual(payload["doc"], "neural-networks.txt")
+        self.assertGreaterEqual(len(payload["sources"]), 1)
+        self.assertEqual(payload["sources"][0]["rank"], 1)
+
+    def test_post_ask_miss(self):
+        status, payload = self._post(
+            "/ask", json.dumps({"question": "what is the capital of france"}))
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["doc"], None)
+        self.assertIn("couldn't find", payload["answer"])
+
+    def test_post_ask_empty_question_400(self):
+        status, payload = self._post("/ask", json.dumps({"question": "  "}))
+        self.assertEqual(status, 400)
+        self.assertIn("error", payload)
+
+    def test_post_ask_bad_json_400(self):
+        status, payload = self._post("/ask", "not json{")
+        self.assertEqual(status, 400)
+        self.assertIn("error", payload)
+
+    def test_unknown_route_404(self):
+        status, _, _ = self._get("/nope")
+        self.assertEqual(status, 404)
+        status, _ = self._post("/askk", json.dumps({"question": "hi"}))
+        self.assertEqual(status, 404)
+
+    def test_cli_missing_index_says_index_first(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["serve", "--index", os.path.join(self.tmp, "nope.json")])
+        self.assertIn("no index found", buf.getvalue())
 
 
 if __name__ == "__main__":
