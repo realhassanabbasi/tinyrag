@@ -21,6 +21,7 @@ from .merge import DEFAULT_OUT, format_merge, merge_indexes
 from .refresh import format_refresh, refresh_index, scan_folder
 from .retriever import retrieve
 from .search import format_search, search_payload
+from .serve import DEFAULT_PORT, serve
 from .stats import format_stats, stats_payload
 from .store import build_index, load_index, save_index
 from .vectorizer import build_idf, tokenize, vectorize
@@ -207,6 +208,14 @@ def cmd_search(query: str, index_path: str = DEFAULT_INDEX, k: int = 5,
     print(format_search(payload))
 
 
+def cmd_serve(index_path: str = DEFAULT_INDEX, port: int = DEFAULT_PORT,
+              k: int = 3) -> None:
+    if not os.path.exists(index_path):
+        print("no index found — run `tinyrag index <folder>` first")
+        return
+    serve(index_path, port, k)
+
+
 def cmd_ask(question: str, index_path: str = DEFAULT_INDEX, k: int = 3,
             sources: int = 0, as_json: bool = False) -> None:
     if not os.path.exists(index_path):
@@ -322,6 +331,14 @@ def main(argv: list[str] | None = None) -> None:
     pc.add_argument("--json", action="store_true",
                     help="print the diff as JSON")
 
+    pc = sub.add_parser("serve", help="ask your docs in the browser — "
+                        "a tiny local web UI on localhost")
+    pc.add_argument("--index", default=DEFAULT_INDEX, help="index file path")
+    pc.add_argument("--port", type=int, default=DEFAULT_PORT,
+                    help="port to listen on (default 8000, localhost only)")
+    pc.add_argument("-k", type=int, default=3,
+                    help="chunks to consider per question")
+
     pc = sub.add_parser("check", help="re-answer a saved question set, "
                         "flag answers that moved")
     pc.add_argument("questions", help="JSON question-set file")
@@ -357,6 +374,8 @@ def main(argv: list[str] | None = None) -> None:
     elif args.cmd == "merge":
         cmd_merge(args.index_a, args.index_b, args.o, args.json,
                   args.force)
+    elif args.cmd == "serve":
+        cmd_serve(args.index, args.port, args.k)
     elif args.cmd == "diff":
         cmd_diff(args.index_a, args.index_b, args.json)
 
