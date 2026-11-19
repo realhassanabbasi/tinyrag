@@ -2,7 +2,7 @@
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-105%20passing-brightgreen?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-116%20passing-brightgreen?style=flat-square)
 ![Deps](https://img.shields.io/badge/dependencies-zero-blue?style=flat-square)
 [![Live demo](https://img.shields.io/badge/demo-live%20showcase-0D9488?style=flat-square)](https://realhassanabbasi.github.io/tinyrag/)
 
@@ -26,6 +26,7 @@ TinyRAG is a minimal Retrieval-Augmented Generation pipeline built **from scratc
 - **Compare two indexes** — `compare` answers the same question set on an old index and a new one and reports what changed: same, changed text, moved to another document, newly answered, lost, or still unanswered; `-o` writes the comparison as a Markdown report, `--json` prints it for scripts
 - **Merge two indexes** — `merge` combines two indexes into one searchable index (notes + docs, v1 + v2) with IDF rebuilt over the merged corpus; exact duplicates are kept once, same-doc conflicts keep the first index's version and name the doc in the report, never silently dropped; `-o` sets the output file (default `merged.json`), `--force` overwrites it
 - **Diff two indexes** — `diff` shows what content changed between two index files, doc by doc: only in A, only in B, identical, or changed (chunk counts plus added/removed/rewritten chunk ids); `--json` prints it for scripts — run it before a merge, since a changed doc is exactly the doc `merge` resolves first-wins
+- **Ask in the browser** — `serve` starts a tiny local web UI on localhost (stdlib only, no files served from disk): type a question, get the same quoted answer the CLI gives, with its citation and evidence list; `GET /health` reports the loaded index, `POST /ask` answers JSON for scripts
 - **IDF-weighted sentence picking** — rare terms (backpropagation) outrank common ones
 
 ## 🚀 Quickstart
@@ -64,6 +65,9 @@ tinyrag merge notes.json docs.json -o combined.json
 
 # before merging, see what actually changed between two indexes
 tinyrag diff index-v1.json index-v2.json
+
+# ask in the browser instead of the terminal
+tinyrag serve
 ```
 
 Or run the instant demo (no install needed):
@@ -485,6 +489,56 @@ lists, one row per changed doc with added/removed/changed chunk ids)
 as pure JSON. A missing index file names which side is missing
 (`no first index found at ...`).
 
+## 🌐 Ask in the browser
+
+Every command so far is terminal-only, and the live demo page is static —
+it can show the loop but it cannot answer your questions. `serve` closes
+that gap: one command starts a tiny web UI over the index you already
+built, on localhost only (default port 8000, `--port` to change it). The
+index loads once; every question runs through the exact `ask` pipeline,
+so a browser answer can never disagree with the terminal answer for the
+same question. The page is one built-in string — no files are served from
+disk, so there is nothing to traverse — and the server talks to nothing
+but the index on disk.
+
+```bash
+tinyrag serve
+```
+
+```
+serving your docs at http://127.0.0.1:8000 — Ctrl+C to stop
+```
+
+Open that address and ask away: the answer appears quoted from your
+documents, with its source document, chunk, and confidence underneath,
+plus the evidence list when more than one chunk matched. A question with
+no match gets the same honest miss the CLI gives. For scripts, the same
+endpoints answer JSON:
+
+```bash
+curl http://127.0.0.1:8000/health
+```
+
+```json
+{"ok": true, "docs": 3, "chunks": 3, "version": "1.10.0"}
+```
+
+```bash
+curl -X POST http://127.0.0.1:8000/ask \
+  -H 'Content-Type: application/json' \
+  -d '{"question": "what is backpropagation"}'
+```
+
+```json
+{"question": "what is backpropagation", "answer": "Training uses backpropagation: the network compares its prediction to the true answer, computes the error, and updates weights using gradient descent.", "doc": "neural-networks.txt", "chunk_id": 0, "confidence": 0.09, "sources": [{"rank": 1, "doc": "neural-networks.txt", "chunk_id": 0, "score": 0.09, "excerpt": "Neural Networks Basics A neural network is a machine learning model inspired by the human brain. It consists of layers of interconnected nodes called neurons. Each connection has a weight that adjusts…"}]}
+```
+
+The output above is real — captured from the installed package against
+the bundled sample docs. An empty question gets a 400 with an honest
+error, and any route other than `/`, `/health`, or `/ask` is a 404.
+With no index file it says `no index found — run tinyrag index <folder>
+first` instead of starting an empty server.
+
 ## 🏗️ Architecture
 
 ```
@@ -525,17 +579,17 @@ as pure JSON. A missing index file names which side is missing
 ## 🧪 Tests
 
 ```bash
-python -m unittest discover -s tests   # 105 tests, all passing
+python -m unittest discover -s tests   # 116 tests, all passing
 ```
 
-Covers: chunking boundaries and overlap, TF-IDF normalization and IDF weighting, cosine sanity, retrieval ranking, IDF-weighted answer picking, honest-miss behavior, index save/load roundtrip, evidence rows (shape, zero-score drop, excerpt truncation, --sources/--json CLI, miss shows no evidence), refresh (no-change no-op, edited/added/deleted files, legacy-index rebuild, missing index/folder, --json report), stats (aggregates, per-doc rows, top terms by chunk count, empty index, largest doc, text/--json CLI, missing index), check (record fills expectations, steady on no change, changed after edit+refresh incl. honest miss, unrecorded never a failure, malformed JSON refused, text/--json CLI, --fail-on-change exit codes, missing file exits 1), search (known-term match, best-first across docs, no-overlap empty result, -k cap, agreement with ask evidence, text/--json CLI, no-match message, missing index), ask-batch (known-question answer, honest miss, counts math, agreement with ask, Markdown report, text/--json CLI, -o writes file, missing/malformed file exit 1), compare (changed/same/moved/new-answer/lost-answer/still-missed, counts math, agreement with ask on both sides, Markdown report, text/--json CLI, -o writes file, missing index/file, malformed file exit 1), merge (disjoint counts, answers from both sides, agreement with ask, IDF rebuilt over the merged corpus, exact duplicates skipped, conflict keeps first, meta merged, text/--json CLI, missing index, existing output refused without --force), diff (identical indexes, only-in-each-side, changed-doc chunk math incl. added/removed/changed ids, empty indexes, text/--json CLI, missing index, diff predicts merge conflicts), and a full end-to-end run over the sample docs.
+Covers: chunking boundaries and overlap, TF-IDF normalization and IDF weighting, cosine sanity, retrieval ranking, IDF-weighted answer picking, honest-miss behavior, index save/load roundtrip, evidence rows (shape, zero-score drop, excerpt truncation, --sources/--json CLI, miss shows no evidence), refresh (no-change no-op, edited/added/deleted files, legacy-index rebuild, missing index/folder, --json report), stats (aggregates, per-doc rows, top terms by chunk count, empty index, largest doc, text/--json CLI, missing index), check (record fills expectations, steady on no change, changed after edit+refresh incl. honest miss, unrecorded never a failure, malformed JSON refused, text/--json CLI, --fail-on-change exit codes, missing file exits 1), search (known-term match, best-first across docs, no-overlap empty result, -k cap, agreement with ask evidence, text/--json CLI, no-match message, missing index), ask-batch (known-question answer, honest miss, counts math, agreement with ask, Markdown report, text/--json CLI, -o writes file, missing/malformed file exit 1), compare (changed/same/moved/new-answer/lost-answer/still-missed, counts math, agreement with ask on both sides, Markdown report, text/--json CLI, -o writes file, missing index/file, malformed file exit 1), merge (disjoint counts, answers from both sides, agreement with ask, IDF rebuilt over the merged corpus, exact duplicates skipped, conflict keeps first, meta merged, text/--json CLI, missing index, existing output refused without --force), diff (identical indexes, only-in-each-side, changed-doc chunk math incl. added/removed/changed ids, empty indexes, text/--json CLI, missing index, diff predicts merge conflicts), serve (browser answer agrees with the CLI, miss shape, page has the ask form and no external assets, GET / serves the page, /health schema, POST /ask round-trip incl. miss, empty-question and bad-JSON 400s, unknown-route 404, missing index message), and a full end-to-end run over the sample docs.
 
 ## 📁 Project structure
 
 ```
 tinyrag/
 ├── tinyrag/
-│   ├── cli.py          # index / ask / refresh / stats / check / search / ask-batch / compare / merge / diff commands
+│   ├── cli.py          # index / ask / refresh / stats / check / search / ask-batch / compare / merge / diff / serve commands
 │   ├── chunker.py      # sliding-window chunking
 │   ├── vectorizer.py   # tokenizer + TF-IDF + cosine, from scratch
 │   ├── retriever.py    # top-k cosine ranking
@@ -549,6 +603,7 @@ tinyrag/
 │   ├── compare.py      # compare two indexes on one question set (text/--json/-o Markdown)
 │   ├── merge.py        # merge two indexes into one (dedupe + conflict rules, --json/--force)
 │   ├── diff.py         # diff two indexes' contents (only/identical/changed docs, --json)
+│   ├── serve.py        # local web UI (localhost-only, GET / + /health, POST /ask, same ask pipeline as the CLI)
 │   ├── store.py        # index save/load (JSON)
 │   └── data/sample_docs/  # 3 demo documents
 ├── tests/test_tinyrag.py
