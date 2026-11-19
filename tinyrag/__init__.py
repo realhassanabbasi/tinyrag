@@ -1,4 +1,4 @@
 """tinyrag — ask questions over your own documents. No API key, no internet."""
 
-__version__ = "1.9.0"
-__all__ = ["chunker", "vectorizer", "retriever", "answerer", "store", "evidence", "refresh", "stats", "check", "search", "ask_batch", "compare", "merge", "diff"]
+__version__ = "1.10.0"
+__all__ = ["chunker", "vectorizer", "retriever", "answerer", "store", "evidence", "refresh", "stats", "check", "search", "ask_batch", "compare", "merge", "diff", "serve"]
