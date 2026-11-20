@@ -6,11 +6,17 @@ uses (tokenize → vectorize → retrieve → answer), so the page can never
 disagree with the CLI. It binds localhost only and serves no files from
 disk — the page is one built-in string — so there is nothing to traverse
 and nothing exposed to the network.
+
+`serve --index-dir DIR` loads every *.json index in a folder instead of
+one file: the page gets a picker, each question is answered from the
+index you picked, and /health lists them all. Files in the folder that
+are not valid indexes are skipped and named, never fatal.
 """
 
 from __future__ import annotations
 
 import json
+import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import __version__
@@ -23,17 +29,20 @@ from .vectorizer import tokenize, vectorize
 DEFAULT_PORT = 8000
 
 
-def ask_payload(index: dict, question: str, k: int = 3) -> dict:
+def ask_payload(index: dict, question: str, k: int = 3,
+                name: str | None = None) -> dict:
     """The answer to one question, same shape as `ask --json`.
 
     Runs the exact CLI pipeline, so a browser answer and a terminal
-    answer for the same question are always identical.
+    answer for the same question are always identical. `name` is the
+    index the answer came from — included when the server knows it,
+    so a multi-index answer is never ambiguous about its source.
     """
     q_terms = tokenize(question)
     q_vec = vectorize(q_terms, index["idf"])
     ranked = retrieve(q_vec, index["vectors"], k=k)
     result = answer(set(q_terms), index["idf"], ranked, index["chunks"])
-    return {
+    payload = {
         "question": question,
         "answer": result["text"],
         "doc": result["doc"],
@@ -41,14 +50,56 @@ def ask_payload(index: dict, question: str, k: int = 3) -> dict:
         "confidence": result["confidence"],
         "sources": evidence_payload(ranked, index["chunks"], n=k),
     }
+    if name is not None:
+        payload["index"] = name
+    return payload
 
 
-def render_page(docs: int, chunks: int) -> str:
+def load_indexes(index_dir: str) -> tuple[dict[str, dict], list[str]]:
+    """Every *.json index in a folder, keyed by file stem.
+
+    Files that are not valid indexes (unreadable, bad JSON, or missing
+    the chunks/idf/vectors shape) are skipped and returned as the
+    second item — a stray file never stops the server.
+    """
+    indexes: dict[str, dict] = {}
+    skipped: list[str] = []
+    for filename in sorted(os.listdir(index_dir)):
+        if not filename.endswith(".json"):
+            continue
+        name = filename[:-len(".json")]
+        try:
+            index = load_index(os.path.join(index_dir, filename))
+        except (OSError, ValueError):
+            skipped.append(filename)
+            continue
+        if (not isinstance(index, dict)
+                or not {"chunks", "idf", "vectors"} <= set(index)):
+            skipped.append(filename)
+            continue
+        indexes[name] = index
+    return indexes, skipped
+
+
+def render_page(docs: int, chunks: int,
+                indexes: list[tuple[str, int, int]] | None = None) -> str:
     """The whole UI: one self-contained page, no external assets.
 
     Dark, teal accent, one question box. The counts are baked in at
     render time from the loaded index — the page never guesses.
+    With more than one index, `indexes` is the (name, docs, chunks)
+    list and the page gets a picker; switching it updates the counts
+    and sends the chosen index with every question.
     """
+    picker = ""
+    index_map: dict[str, list[int]] = {}
+    if indexes and len(indexes) > 1:
+        options = "".join(
+            f'<option value="{name}">{name} ({d} docs)</option>'
+            for name, d, _ in indexes)
+        picker = ('<label for="idx">Index</label>'
+                  f'<select id="idx">{options}</select>')
+        index_map = {name: [d, c] for name, d, c in indexes}
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -63,6 +114,13 @@ def render_page(docs: int, chunks: int) -> str:
   h1 {{ color: #fff; font-size: 28px; margin: 0 0 4px; }}
   h1 span {{ color: #0d9488; }}
   p.sub {{ color: #9ca3af; margin: 0 0 24px; }}
+  label {{ display: block; color: #9ca3af; font-size: 13px;
+          text-transform: uppercase; letter-spacing: 0.05em;
+          margin: 0 0 6px; }}
+  select {{ width: 100%; padding: 12px 14px; font-size: 16px;
+           border-radius: 8px; border: 1px solid #374151;
+           background: #1f2937; color: #fff; margin-bottom: 16px; }}
+  select:focus {{ outline: 2px solid #0d9488; border-color: #0d9488; }}
   form {{ display: flex; gap: 8px; }}
   input {{ flex: 1; padding: 12px 14px; font-size: 16px; border-radius: 8px;
           border: 1px solid #374151; background: #1f2937; color: #fff; }}
@@ -91,8 +149,9 @@ def render_page(docs: int, chunks: int) -> str:
 <body>
 <main>
   <h1>Tiny<span>RAG</span></h1>
-  <p class="sub">Ask questions over your own documents — {docs} documents,
-  {chunks} chunks indexed. Answers are quoted from your docs, never made up.</p>
+  <p class="sub">Ask questions over your own documents — <span id="counts">{docs} documents,
+  {chunks} chunks indexed</span>. Answers are quoted from your docs, never made up.</p>
+  {picker}
   <form id="ask-form">
     <input id="q" type="text" placeholder="What is backpropagation?"
            autocomplete="off" autofocus>
@@ -105,16 +164,27 @@ def render_page(docs: int, chunks: int) -> str:
 <script>
 const form = document.getElementById("ask-form");
 const box = document.getElementById("answer");
+const picker = document.getElementById("idx");
+const counts = document.getElementById("counts");
+const INDEXES = {json.dumps(index_map)};
+if (picker) {{
+  picker.addEventListener("change", () => {{
+    const c = INDEXES[picker.value];
+    counts.textContent = c[0] + " documents, " + c[1] + " chunks indexed";
+  }});
+}}
 form.addEventListener("submit", async (e) => {{
   e.preventDefault();
   const question = document.getElementById("q").value.trim();
   if (!question) return;
   box.className = "show";
   box.innerHTML = '<p class="text">Thinking…</p>';
+  const body = {{ question }};
+  if (picker) body.index = picker.value;
   const res = await fetch("/ask", {{
     method: "POST",
     headers: {{ "Content-Type": "application/json" }},
-    body: JSON.stringify({{ question }}),
+    body: JSON.stringify(body),
   }});
   const data = await res.json();
   if (!res.ok) {{
@@ -146,15 +216,25 @@ form.addEventListener("submit", async (e) => {{
 """
 
 
-def make_handler(index: dict, k: int = 3):
-    """A request handler bound to one loaded index.
+def make_handler(indexes: dict | dict[str, dict], k: int = 3):
+    """A request handler bound to one or more loaded indexes.
 
-    GET / serves the page, GET /health reports the index, POST /ask
-    answers a question. Anything else is a 404 — no file is ever read
+    A single index dict is accepted for the old call shape and served
+    under the name "index". A dict of name → index serves them all:
+    GET / shows the picker, GET /health lists every index, and
+    POST /ask takes an optional "index" name — required when there
+    is more than one, so a question can never silently land on the
+    wrong documents. Anything else is a 404 — no file is ever read
     from disk for a request.
     """
-    docs = len({c["doc"] for c in index["chunks"]})
-    chunks = len(index["chunks"])
+    if "chunks" in indexes:  # a single loaded index, not a name → index map
+        indexes = {"index": indexes}
+    names = sorted(indexes)
+    stats = {
+        name: (len({c["doc"] for c in indexes[name]["chunks"]}),
+               len(indexes[name]["chunks"]))
+        for name in names
+    }
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):  # keep the terminal quiet
@@ -178,12 +258,18 @@ def make_handler(index: dict, k: int = 3):
 
         def do_GET(self) -> None:  # noqa: N802 - http.server naming
             if self.path == "/":
-                self._send_html(render_page(docs, chunks))
+                first = stats[names[0]]
+                self._send_html(render_page(
+                    first[0], first[1],
+                    indexes=[(n, *stats[n]) for n in names]))
             elif self.path == "/health":
                 self._send_json({
                     "ok": True,
-                    "docs": docs,
-                    "chunks": chunks,
+                    "indexes": [
+                        {"name": n, "docs": stats[n][0],
+                         "chunks": stats[n][1]}
+                        for n in names
+                    ],
                     "version": __version__,
                 })
             else:
@@ -205,24 +291,57 @@ def make_handler(index: dict, k: int = 3):
                     {"error": "question must be a non-empty string"},
                     status=400)
                 return
-            self._send_json(ask_payload(index, question, k=k))
+            name = body.get("index") if isinstance(body, dict) else None
+            if name is None:
+                if len(names) > 1:
+                    self._send_json(
+                        {"error": "pick an index", "indexes": names},
+                        status=400)
+                    return
+                name = names[0]
+            elif not isinstance(name, str) or name not in indexes:
+                self._send_json(
+                    {"error": f"unknown index {name!r}", "indexes": names},
+                    status=400)
+                return
+            self._send_json(ask_payload(indexes[name], question, k=k,
+                                        name=name))
 
     return Handler
 
 
-def make_server(index: dict, port: int = 0, k: int = 3) -> ThreadingHTTPServer:
+def make_server(indexes: dict | dict[str, dict], port: int = 0,
+                k: int = 3) -> ThreadingHTTPServer:
     """A server bound to localhost only. Port 0 picks a free port."""
     return ThreadingHTTPServer(
-        ("127.0.0.1", port), make_handler(index, k))
+        ("127.0.0.1", port), make_handler(indexes, k))
 
 
-def serve(index_path: str, port: int = DEFAULT_PORT, k: int = 3) -> None:
-    """Load the index once, then serve the UI until Ctrl+C."""
-    index = load_index(index_path)
-    server = make_server(index, port, k)
-    host, bound_port = server.server_address
-    print(f"serving your docs at http://{host}:{bound_port} — Ctrl+C to stop",
-          flush=True)
+def serve(index_path: str | None = None, index_dir: str | None = None,
+          port: int = DEFAULT_PORT, k: int = 3) -> None:
+    """Load the index once (or every index in a folder), then serve the
+    UI until Ctrl+C."""
+    if index_dir is not None:
+        indexes, skipped = load_indexes(index_dir)
+        if not indexes:
+            print(f"no indexes found in {index_dir} — run "
+                  "`tinyrag index <folder> --out "
+                  f"{index_dir}/<name>.json` first")
+            return
+        server = make_server(indexes, port, k)
+        host, bound_port = server.server_address
+        names = sorted(indexes)
+        print(f"serving {len(names)} indexes ({', '.join(names)}) at "
+              f"http://{host}:{bound_port} — Ctrl+C to stop", flush=True)
+        if skipped:
+            print(f"skipped {len(skipped)} file(s) that are not indexes: "
+                  f"{', '.join(skipped)}", flush=True)
+    else:
+        index = load_index(index_path)
+        server = make_server(index, port, k)
+        host, bound_port = server.server_address
+        print(f"serving your docs at http://{host}:{bound_port} — Ctrl+C to stop",
+              flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
