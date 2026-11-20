@@ -222,8 +222,8 @@ class TestAskSources(unittest.TestCase):
         self.assertNotIn("Evidence:", out)
         self.assertIn("couldn't find anything", out)
 
-    def test_version_is_1_10_0(self):
-        self.assertEqual(__version__, "1.10.0")
+    def test_version_is_1_11_0(self):
+        self.assertEqual(__version__, "1.11.0")
 
 
 class TestRefresh(unittest.TestCase):
@@ -1427,8 +1427,10 @@ class TestServe(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(ctype, "application/json")
         payload = json.loads(body)
-        self.assertEqual(payload, {"ok": True, "docs": 3, "chunks": 3,
-                                   "version": "1.10.0"})
+        self.assertEqual(payload, {
+            "ok": True,
+            "indexes": [{"name": "index", "docs": 3, "chunks": 3}],
+            "version": "1.11.0"})
 
     def test_post_ask_round_trip(self):
         status, payload = self._post(
@@ -1467,6 +1469,170 @@ class TestServe(unittest.TestCase):
         with contextlib.redirect_stdout(buf):
             main(["serve", "--index", os.path.join(self.tmp, "nope.json")])
         self.assertIn("no index found", buf.getvalue())
+
+
+class TestServeMulti(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.idx_dir = os.path.join(self.tmp, "indexes")
+        os.makedirs(self.idx_dir)
+        base = os.path.join(os.path.dirname(__file__), "..", "tinyrag",
+                            "data", "sample_docs")
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["index", base, "--out",
+                  os.path.join(self.idx_dir, "course.json")])
+        plants_docs = os.path.join(self.tmp, "plants_docs")
+        os.makedirs(plants_docs)
+        with open(os.path.join(plants_docs, "plants.txt"),
+                  "w", encoding="utf-8") as f:
+            f.write("Photosynthesis\n\nPhotosynthesis is the process by "
+                    "which green plants convert sunlight, water and carbon "
+                    "dioxide into oxygen and glucose. Chlorophyll in the "
+                    "leaves captures light energy.")
+        with contextlib.redirect_stdout(buf):
+            main(["index", plants_docs, "--out",
+                  os.path.join(self.idx_dir, "plants.json")])
+        # Junk that must be skipped, never fatal.
+        with open(os.path.join(self.idx_dir, "junk.json"),
+                  "w", encoding="utf-8") as f:
+            f.write("not json{")
+        with open(os.path.join(self.idx_dir, "notanindex.json"),
+                  "w", encoding="utf-8") as f:
+            json.dump({"hello": "world"}, f)
+        with open(os.path.join(self.idx_dir, "notes.txt"),
+                  "w", encoding="utf-8") as f:
+            f.write("ignored — not a .json file")
+        self.indexes, self.skipped = serve.load_indexes(self.idx_dir)
+        # A real server on localhost, ephemeral port, in a thread.
+        self.server = serve.make_server(self.indexes, 0)
+        self.thread = threading.Thread(target=self.server.serve_forever,
+                                       daemon=True)
+        self.thread.start()
+        host, port = self.server.server_address
+        self.base_url = f"http://{host}:{port}"
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        shutil.rmtree(self.tmp)
+
+    def _get(self, path):
+        try:
+            with urllib.request.urlopen(self.base_url + path) as res:
+                return res.status, res.read().decode("utf-8"), \
+                    res.headers.get_content_type()
+        except urllib.error.HTTPError as exc:
+            return exc.code, exc.read().decode("utf-8"), \
+                exc.headers.get_content_type()
+
+    def _post(self, path, raw):
+        req = urllib.request.Request(
+            self.base_url + path, data=raw.encode("utf-8"),
+            headers={"Content-Type": "application/json"}, method="POST")
+        try:
+            with urllib.request.urlopen(req) as res:
+                return res.status, json.loads(res.read())
+        except urllib.error.HTTPError as exc:
+            return exc.code, json.loads(exc.read())
+
+    def test_load_indexes_names_and_skips(self):
+        self.assertEqual(sorted(self.indexes), ["course", "plants"])
+        self.assertEqual(self.skipped, ["junk.json", "notanindex.json"])
+
+    def test_page_has_index_picker(self):
+        status, body, ctype = self._get("/")
+        self.assertEqual(status, 200)
+        self.assertEqual(ctype, "text/html")
+        self.assertIn("<select", body)
+        self.assertIn('value="course"', body)
+        self.assertIn('value="plants"', body)
+        self.assertIn("3 documents", body)
+
+    def test_render_page_single_has_no_picker(self):
+        self.assertNotIn("<select", serve.render_page(3, 3))
+        multi = serve.render_page(3, 3, indexes=[("course", 3, 3),
+                                                 ("plants", 1, 1)])
+        self.assertIn("<select", multi)
+        self.assertIn('value="plants"', multi)
+
+    def test_health_lists_indexes(self):
+        status, body, ctype = self._get("/health")
+        self.assertEqual(status, 200)
+        self.assertEqual(ctype, "application/json")
+        payload = json.loads(body)
+        self.assertEqual(payload, {
+            "ok": True,
+            "indexes": [{"name": "course", "docs": 3, "chunks": 3},
+                        {"name": "plants", "docs": 1, "chunks": 1}],
+            "version": "1.11.0"})
+
+    def test_ask_routes_to_named_index(self):
+        status, payload = self._post(
+            "/ask", json.dumps({"question": "what is backpropagation",
+                                "index": "course"}))
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["doc"], "neural-networks.txt")
+        self.assertEqual(payload["index"], "course")
+        status, payload = self._post(
+            "/ask", json.dumps({"question": "what is photosynthesis",
+                                "index": "plants"}))
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["doc"], "plants.txt")
+        self.assertEqual(payload["index"], "plants")
+
+    def test_ask_wrong_index_misses_honestly(self):
+        # The question matches plants, not course — routing must not
+        # silently fall back to the other index.
+        status, payload = self._post(
+            "/ask", json.dumps({"question": "what is photosynthesis",
+                                "index": "course"}))
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["doc"], None)
+        self.assertIn("couldn't find", payload["answer"])
+
+    def test_ask_unknown_index_400(self):
+        status, payload = self._post(
+            "/ask", json.dumps({"question": "hi", "index": "nope"}))
+        self.assertEqual(status, 400)
+        self.assertIn("unknown index", payload["error"])
+        self.assertEqual(payload["indexes"], ["course", "plants"])
+
+    def test_ask_no_index_with_many_400(self):
+        status, payload = self._post(
+            "/ask", json.dumps({"question": "what is backpropagation"}))
+        self.assertEqual(status, 400)
+        self.assertIn("pick an index", payload["error"])
+        self.assertEqual(payload["indexes"], ["course", "plants"])
+
+    def test_payload_carries_index_name(self):
+        payload = serve.ask_payload(self.indexes["course"],
+                                    "what is backpropagation", name="course")
+        self.assertEqual(payload["index"], "course")
+        self.assertEqual(payload["doc"], "neural-networks.txt")
+
+    def test_cli_index_dir_empty(self):
+        empty = os.path.join(self.tmp, "empty")
+        os.makedirs(empty)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["serve", "--index-dir", empty])
+        self.assertIn("no indexes found", buf.getvalue())
+
+    def test_cli_index_dir_missing(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["serve", "--index-dir",
+                  os.path.join(self.tmp, "no-such-dir")])
+        self.assertIn("no index folder", buf.getvalue())
+
+    def test_cli_index_and_dir_conflict(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["serve", "--index",
+                  os.path.join(self.idx_dir, "course.json"),
+                  "--index-dir", self.idx_dir])
+        self.assertIn("not both", buf.getvalue())
 
 
 if __name__ == "__main__":
