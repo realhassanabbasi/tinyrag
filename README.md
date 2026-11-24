@@ -2,7 +2,7 @@
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-116%20passing-brightgreen?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-128%20passing-brightgreen?style=flat-square)
 ![Deps](https://img.shields.io/badge/dependencies-zero-blue?style=flat-square)
 [![Live demo](https://img.shields.io/badge/demo-live%20showcase-0D9488?style=flat-square)](https://realhassanabbasi.github.io/tinyrag/)
 
@@ -83,7 +83,7 @@ python demo.py
 
 ## 🌐 Live demo
 
-See TinyRAG run without installing anything — the interactive showcase walks through the full loop (index → ask → search → stats → check) on the bundled sample docs, with real terminal output from `tinyrag 1.5.0`:
+See TinyRAG run without installing anything — the interactive showcase walks through the full loop (index → ask → search → stats → check) on the bundled sample docs, with real terminal output from `tinyrag 1.5.0`, plus the `serve` section with real output from `tinyrag 1.11.0`:
 
 **https://realhassanabbasi.github.io/tinyrag/**
 
