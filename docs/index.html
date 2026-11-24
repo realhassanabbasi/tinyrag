@@ -91,7 +91,7 @@
   <p class="tagline">Ask questions over your own documents. No API key, no internet, no dependencies.</p>
   <div class="badges">
     <span class="badge">Python <b>3.10+</b></span>
-    <span class="badge"><b>59</b> tests passing</span>
+    <span class="badge"><b>128</b> tests passing</span>
     <span class="badge"><b>zero</b> dependencies</span>
     <span class="badge">License <b>MIT</b></span>
   </div>
@@ -120,7 +120,7 @@
 
 <section>
   <h2>Try it in the terminal</h2>
-  <p class="sub">Every transcript below is real output from <code>tinyrag 1.5.0</code>, run on the three sample documents bundled with the repo. No mockups. Click a command to see it run.</p>
+  <p class="sub">Every transcript below is real output from <code>tinyrag 1.5.0</code>, run on the three sample documents bundled with the repo. No mockups. Click a command to see it run. The <code>serve</code> tab shows real output from <code>tinyrag 1.11.0</code>.</p>
   <div class="terminal">
     <div class="tabs">
       <button class="tab active" data-tab="index">index</button>
@@ -128,6 +128,7 @@
       <button class="tab" data-tab="search">search</button>
       <button class="tab" data-tab="stats">stats</button>
       <button class="tab" data-tab="check">check</button>
+      <button class="tab" data-tab="serve">serve</button>
     </div>
     <div class="panel active" id="panel-index">
 <div class="cmd"><span class="prompt">$</span> tinyrag index ./my-notes</div>
@@ -194,13 +195,19 @@ Most common terms (by chunks they appear in):
 
 3 checked: 3 steady, 0 changed</pre>
 </div>
+    <div class="panel" id="panel-serve">
+<div class="cmd"><span class="prompt">$</span> tinyrag serve</div>
+<pre>serving your docs at http://127.0.0.1:8000 — Ctrl+C to stop</pre>
+<div class="cmd"><span class="prompt">$</span> curl http://127.0.0.1:8000/health</div>
+<pre>{"ok": true, "indexes": [{"name": "index", "docs": 3, "chunks": 3}], "version": "1.11.0"}</pre>
+</div>
   </div>
   <p class="note">Answers are real sentences from your documents, never generated text. When nothing matches, TinyRAG says so honestly instead of hallucinating.</p>
 </section>
 
 <section>
   <h2>What it can do</h2>
-  <p class="sub">Six commands, one loop: index &rarr; ask &rarr; inspect &rarr; guard.</p>
+  <p class="sub">Eleven commands, one loop: index &rarr; ask &rarr; inspect &rarr; guard &rarr; serve.</p>
   <div class="grid">
     <div class="card"><h3><code>index</code></h3><p>Build a persistent JSON index from a folder of .txt / .md files. Build once, ask anytime.</p></div>
     <div class="card"><h3><code>ask</code></h3><p>Extractive answers with a citation — document, chunk, confidence. <code>--sources N</code> shows the ranked evidence behind it.</p></div>
@@ -208,7 +215,35 @@ Most common terms (by chunks they appear in):
     <div class="card"><h3><code>stats</code></h3><p>Documents, chunks, vocabulary, per-document counts, most common terms — read straight from the saved index.</p></div>
     <div class="card"><h3><code>refresh</code></h3><p>Re-index only added or edited files; drop deleted ones. A no-change refresh says so.</p></div>
     <div class="card"><h3><code>check</code></h3><p>Re-answer a saved question set after a refresh and flag answers that moved or vanished. CI-ready with <code>--fail-on-change</code>.</p></div>
+    <div class="card"><h3><code>ask-batch</code></h3><p>Run a whole question set through the ask pipeline and print the answers with sources, or write them as a Markdown FAQ with <code>-o</code>.</p></div>
+    <div class="card"><h3><code>compare</code></h3><p>Answer the same question set on an old index and a new one and report what changed: same, changed, moved, newly answered, lost, or still unanswered.</p></div>
+    <div class="card"><h3><code>merge</code></h3><p>Combine two indexes into one searchable index with IDF rebuilt over the merged corpus; exact duplicates kept once, conflicts keep the first index&rsquo;s version.</p></div>
+    <div class="card"><h3><code>diff</code></h3><p>Show what content changed between two index files, doc by doc — run it before a merge, since a changed doc is exactly the doc merge resolves first-wins.</p></div>
+    <div class="card"><h3><code>serve</code></h3><p>Ask in the browser — a tiny local web UI on localhost with the same quoted answers, plus JSON endpoints for scripts; <code>--index-dir</code> serves every index with a picker.</p></div>
   </div>
+</section>
+
+<section>
+  <h2>Ask in the browser</h2>
+  <p class="sub">Every command so far is terminal-only, and this page is static — it can show the loop but it cannot answer your questions. <code>serve</code> closes that gap: one command starts a tiny web UI over the index you already built, on localhost only. The page is one built-in string — no files are served from disk — and every question runs through the exact <code>ask</code> pipeline, so a browser answer can never disagree with the terminal answer.</p>
+  <div class="terminal">
+    <div class="panel active">
+<div class="cmd"><span class="prompt">$</span> tinyrag serve --index-dir indexes</div>
+<pre>serving 2 indexes (course, plants) at http://127.0.0.1:8000 — Ctrl+C to stop
+skipped 1 file(s) that are not indexes: stray.json</pre>
+<div class="cmd"><span class="prompt">$</span> curl http://127.0.0.1:8000/health</div>
+<pre>{"ok": true, "indexes": [{"name": "course", "docs": 3, "chunks": 3}, {"name": "plants", "docs": 1, "chunks": 1}], "version": "1.11.0"}</pre>
+<div class="cmd"><span class="prompt">$</span> curl -X POST http://127.0.0.1:8000/ask \<br>&nbsp;&nbsp;-H 'Content-Type: application/json' \<br>&nbsp;&nbsp;-d '{"question": "what is photosynthesis", "index": "plants"}'</div>
+<pre>{"question": "what is photosynthesis", "answer": "Photosynthesis Photosynthesis is the process by which green plants convert sunlight, water and carbon dioxide into oxygen and glucose.", "doc": "plants.txt", "chunk_id": 0, "confidence": 0.46, "sources": [{"rank": 1, "doc": "plants.txt", "chunk_id": 0, "score": 0.46, "excerpt": "Photosynthesis Photosynthesis is the process by which green plants convert sunlight, water and carbon dioxide into oxygen and glucose. Chlorophyll in the leaves captures light energy."}], "index": "plants"}</pre>
+    </div>
+  </div>
+  <p class="note">One server for every index you have: the page gets an index picker, and the answer payload names its index, so a script answer is never ambiguous about its source. The index name is the file stem (<code>course.json</code> &rarr; <code>course</code>). Files that are not valid indexes are skipped and named — a stray file never stops the server. Ask without an <code>"index"</code> when several are loaded and the server refuses instead of guessing:</p>
+  <div class="terminal">
+    <div class="panel active">
+<pre>{"error": "pick an index", "indexes": ["course", "plants"]}</pre>
+    </div>
+  </div>
+  <p class="note">All serve output above is real, captured from the installed package.</p>
 </section>
 
 <section>
@@ -222,7 +257,7 @@ Most common terms (by chunks they appear in):
 
 <footer>
   <p>Built by <a href="https://github.com/realhassanabbasi">Hassan Abbasi</a> — AI Engineer building AI-powered products with excellent user experiences.<br>
-  TinyRAG is MIT licensed. The transcripts above are real CLI output from tinyrag 1.5.0.</p>
+  TinyRAG is MIT licensed. The terminal transcripts above are real CLI output from tinyrag 1.5.0; the serve examples are real output from tinyrag 1.11.0.</p>
 </footer>
 
 </div>
