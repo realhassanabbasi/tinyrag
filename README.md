@@ -2,7 +2,7 @@
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-128%20passing-brightgreen?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-147%20passing-brightgreen?style=flat-square)
 ![Deps](https://img.shields.io/badge/dependencies-zero-blue?style=flat-square)
 [![Live demo](https://img.shields.io/badge/demo-live%20showcase-0D9488?style=flat-square)](https://realhassanabbasi.github.io/tinyrag/)
 
@@ -18,6 +18,7 @@ TinyRAG is a minimal Retrieval-Augmented Generation pipeline built **from scratc
 - **Honest misses** — below-threshold queries get "I couldn't find anything" instead of a guess
 - **Persistent index** — build once, save to JSON, ask anytime without re-indexing
 - **Evidence view** — `ask --sources N` shows the ranked chunks behind an answer (doc, chunk, score, excerpt); `--json` prints the answer plus sources for scripts
+- **Context budget** — `ask --max-context N` caps the context the answer is drawn from to N characters: whole chunks while they fit, then the best sentences of the next chunk (scored the same way the answerer scores them), the rest dropped — with `--show-context` printing the exact fitted context and a report of what was kept, trimmed, and dropped; `--json` carries the same as a `context` object
 - **Incremental refresh** — `refresh` re-indexes only added/edited files, drops deleted ones, and leaves unchanged files alone (signature = mtime + size)
 - **Index stats** — `stats` shows documents, chunks, vocabulary size, per-document word counts, and the most common terms, read straight from the saved index; `--json` prints the same numbers for scripts
 - **Regression check** — `check` re-answers a saved question set after a refresh and flags answers that moved to a different document (or vanished); `--record` builds the baseline, `--fail-on-change` exits 1 for CI
@@ -39,6 +40,9 @@ tinyrag index ./my-notes
 
 # ask questions
 tinyrag ask "what is backpropagation"
+
+# same question, but the answer may only come from 200 characters of context
+tinyrag ask "what is backpropagation" --max-context 200 --show-context
 
 # add a document later, then refresh instead of re-indexing everything
 tinyrag refresh ./my-notes
@@ -132,6 +136,57 @@ For scripts, `--json` prints the answer plus the same sources list as pure
 JSON (`question`, `answer`, `doc`, `chunk_id`, `confidence`, `sources`).
 On an honest miss there is no Evidence block — nothing matched, so there
 is nothing to show.
+
+## 🧠 Context budget
+
+A real RAG pipeline hands the model a context window, not the whole index.
+`ask` used to read the top-k chunks in full — with big documents that
+context is unbounded. `--max-context N` caps it at N characters: chunks are
+walked best-first and kept whole while they fit; a chunk that doesn't fit is
+trimmed to its best sentences (scored by the same IDF weights the answerer
+uses, reassembled in original order); a chunk where not even one sentence
+fits is dropped. The answer is then drawn only from what survived, and the
+report says exactly what was kept, trimmed, and dropped — never silently.
+
+```bash
+tinyrag ask "what is backpropagation" --max-context 200 --show-context
+```
+
+```
+Q: what is backpropagation
+
+A: Training uses backpropagation: the network compares its prediction to the true answer, computes the error, and updates weights using gradient descent.
+
+   ↳ neural-networks.txt (chunk 0, confidence 0.09)
+   context: 150 / 200 chars (1 kept, 1 trimmed, 0 dropped)
+
+Context: 150 / 200 chars (1 kept, 1 trimmed, 0 dropped)
+  [neural-networks.txt chunk 0, 0.09] (trimmed)
+    Training uses backpropagation: the network compares its prediction to the true answer, computes the error, and updates weights using gradient descent.
+```
+
+The full 825-character chunk was trimmed to the one sentence that answers
+the question — the answer is unchanged, and the context line proves it.
+`--show-context` without a budget prints the retrieved chunks whole, so you
+can see exactly what the answer was drawn from either way. `--json` carries
+the same fit as a `context` object (`budget`, `chars_in`, `chars_out`,
+`kept`, `trimmed`, `dropped`, `truncated`, `chunks`).
+
+A budget too small for any sentence is an honest miss, not a guess:
+
+```bash
+tinyrag ask "what is backpropagation" --max-context 5
+```
+
+```
+Q: what is backpropagation
+
+A: I couldn't find anything relevant in your documents.
+
+   (tip: nothing fit in 5 chars — raise --max-context)
+```
+
+All output above is real, captured from the installed package.
 
 ## 🔄 Refresh the index
 
@@ -616,6 +671,10 @@ installed package.
                                                  └─────┬─────┘
                                                        ▼
                                                  ┌───────────┐
+                                                 │  context  │ fit top-k into
+                                                 └─────┬─────┘ a char budget
+                                                       ▼
+                                                 ┌───────────┐
                                                  │ answerer  │ best sentence by
                                                  └───────────┘ IDF-weighted term
                                                                overlap + citation
@@ -626,6 +685,7 @@ installed package.
 - **Extractive instead of generative** — without an LLM there is nothing to generate with; quoting real sentences guarantees zero hallucination by construction.
 - **IDF-weighted sentence scoring** — plain term-overlap lets two common words beat one rare, decisive term; weighting by IDF fixes that.
 - **Stopword removal** — "what is the" matches every document; dropping ~100 common words is standard IR practice and cut false positives to zero in testing.
+- **Context budget trims sentences, never words** — cutting mid-sentence would hand the answerer fragments; the budget keeps whole sentences, best-first, in original order, and reports what it cut.
 
 ## ⚠️ Honest limitations
 
@@ -634,14 +694,15 @@ installed package.
 - **Single-term queries on long docs score low** — TF-IDF cosine dilutes one rare term across a long document (measured: 0.09 on the demo corpus vs 0.29–0.30 for multi-term queries).
 - **Naive sentence splitter** — abbreviations like "e.g." can split sentences early.
 - **Small-scale design** — whole index lives in memory as JSON; fine for notes and docs, not for millions of pages.
+- **Context budget is CLI-only for now** — `serve` answers from the full top-k chunks; `--max-context` / `--show-context` don't apply in the browser yet.
 
 ## 🧪 Tests
 
 ```bash
-python -m unittest discover -s tests   # 128 tests, all passing
+python -m unittest discover -s tests   # 147 tests, all passing
 ```
 
-Covers: chunking boundaries and overlap, TF-IDF normalization and IDF weighting, cosine sanity, retrieval ranking, IDF-weighted answer picking, honest-miss behavior, index save/load roundtrip, evidence rows (shape, zero-score drop, excerpt truncation, --sources/--json CLI, miss shows no evidence), refresh (no-change no-op, edited/added/deleted files, legacy-index rebuild, missing index/folder, --json report), stats (aggregates, per-doc rows, top terms by chunk count, empty index, largest doc, text/--json CLI, missing index), check (record fills expectations, steady on no change, changed after edit+refresh incl. honest miss, unrecorded never a failure, malformed JSON refused, text/--json CLI, --fail-on-change exit codes, missing file exits 1), search (known-term match, best-first across docs, no-overlap empty result, -k cap, agreement with ask evidence, text/--json CLI, no-match message, missing index), ask-batch (known-question answer, honest miss, counts math, agreement with ask, Markdown report, text/--json CLI, -o writes file, missing/malformed file exit 1), compare (changed/same/moved/new-answer/lost-answer/still-missed, counts math, agreement with ask on both sides, Markdown report, text/--json CLI, -o writes file, missing index/file, malformed file exit 1), merge (disjoint counts, answers from both sides, agreement with ask, IDF rebuilt over the merged corpus, exact duplicates skipped, conflict keeps first, meta merged, text/--json CLI, missing index, existing output refused without --force), diff (identical indexes, only-in-each-side, changed-doc chunk math incl. added/removed/changed ids, empty indexes, text/--json CLI, missing index, diff predicts merge conflicts), serve (browser answer agrees with the CLI, miss shape, page has the ask form and no external assets, GET / serves the page, /health schema, POST /ask round-trip incl. miss, empty-question and bad-JSON 400s, unknown-route 404, missing index message; multi-index: folder load skips junk, page has the picker, /health lists indexes, /ask routes by name, wrong-index miss, unknown/no-index 400s, payload names its index, --index-dir empty/missing/conflict messages), and a full end-to-end run over the sample docs.
+Covers: chunking boundaries and overlap, TF-IDF normalization and IDF weighting, cosine sanity, retrieval ranking, IDF-weighted answer picking, honest-miss behavior, index save/load roundtrip, context budget (whole-chunk fit, best-first trim in original order, no-term sentences dropped, chunk dropped when nothing fits, zero-score chunks ignored, budget validation, payload schema, format output, `ask --max-context`/`--show-context`/--json CLI incl. tiny-budget honest miss and huge-budget no-op), evidence rows (shape, zero-score drop, excerpt truncation, --sources/--json CLI, miss shows no evidence), refresh (no-change no-op, edited/added/deleted files, legacy-index rebuild, missing index/folder, --json report), stats (aggregates, per-doc rows, top terms by chunk count, empty index, largest doc, text/--json CLI, missing index), check (record fills expectations, steady on no change, changed after edit+refresh incl. honest miss, unrecorded never a failure, malformed JSON refused, text/--json CLI, --fail-on-change exit codes, missing file exits 1), search (known-term match, best-first across docs, no-overlap empty result, -k cap, agreement with ask evidence, text/--json CLI, no-match message, missing index), ask-batch (known-question answer, honest miss, counts math, agreement with ask, Markdown report, text/--json CLI, -o writes file, missing/malformed file exit 1), compare (changed/same/moved/new-answer/lost-answer/still-missed, counts math, agreement with ask on both sides, Markdown report, text/--json CLI, -o writes file, missing index/file, malformed file exit 1), merge (disjoint counts, answers from both sides, agreement with ask, IDF rebuilt over the merged corpus, exact duplicates skipped, conflict keeps first, meta merged, text/--json CLI, missing index, existing output refused without --force), diff (identical indexes, only-in-each-side, changed-doc chunk math incl. added/removed/changed ids, empty indexes, text/--json CLI, missing index, diff predicts merge conflicts), serve (browser answer agrees with the CLI, miss shape, page has the ask form and no external assets, GET / serves the page, /health schema, POST /ask round-trip incl. miss, empty-question and bad-JSON 400s, unknown-route 404, missing index message; multi-index: folder load skips junk, page has the picker, /health lists indexes, /ask routes by name, wrong-index miss, unknown/no-index 400s, payload names its index, --index-dir empty/missing/conflict messages), and a full end-to-end run over the sample docs.
 
 ## 📁 Project structure
 
@@ -653,6 +714,7 @@ tinyrag/
 │   ├── vectorizer.py   # tokenizer + TF-IDF + cosine, from scratch
 │   ├── retriever.py    # top-k cosine ranking
 │   ├── answerer.py     # extractive answering with citations
+│   ├── context.py      # context budget — fit top-k chunks into N chars (whole / best-sentence trim / drop, with report)
 │   ├── evidence.py     # evidence rows behind an answer (--sources/--json)
 │   ├── refresh.py      # incremental re-index (added/updated/removed/unchanged)
 │   ├── stats.py        # index stats (docs/chunks/vocab/top terms)
