@@ -91,7 +91,7 @@
   <p class="tagline">Ask questions over your own documents. No API key, no internet, no dependencies.</p>
   <div class="badges">
     <span class="badge">Python <b>3.10+</b></span>
-    <span class="badge"><b>128</b> tests passing</span>
+    <span class="badge"><b>147</b> tests passing</span>
     <span class="badge"><b>zero</b> dependencies</span>
     <span class="badge">License <b>MIT</b></span>
   </div>
@@ -120,7 +120,7 @@
 
 <section>
   <h2>Try it in the terminal</h2>
-  <p class="sub">Every transcript below is real output from <code>tinyrag 1.5.0</code>, run on the three sample documents bundled with the repo. No mockups. Click a command to see it run. The <code>serve</code> tab shows real output from <code>tinyrag 1.11.0</code>.</p>
+  <p class="sub">Every transcript below is real output from <code>tinyrag 1.5.0</code>, run on the three sample documents bundled with the repo. No mockups. Click a command to see it run. The <code>serve</code> tab shows real output from <code>tinyrag 1.11.0</code>, and the context-budget transcript in the <code>ask</code> tab is real output from <code>tinyrag 1.12.0</code>.</p>
   <div class="terminal">
     <div class="tabs">
       <button class="tab active" data-tab="index">index</button>
@@ -150,6 +150,17 @@ A: What is Retrieval-Augmented Generation Retrieval-Augmented Generation, or RAG
 
 Evidence:
   1. rag-explained.txt (chunk 0, 0.33) — "What is Retrieval-Augmented Generation Retrieval-Augmented Generation, or RAG, is a technique that combines a retriever with a generator. Instead of relying only on what a language model memorized dur…"</pre>
+<div class="cmd"><span class="prompt">$</span> tinyrag ask "what is backpropagation" --max-context 200 --show-context</div>
+<pre>Q: what is backpropagation
+
+A: Training uses backpropagation: the network compares its prediction to the true answer, computes the error, and updates weights using gradient descent.
+
+   ↳ neural-networks.txt (chunk 0, confidence 0.09)
+   context: 150 / 200 chars (1 kept, 1 trimmed, 0 dropped)
+
+Context: 150 / 200 chars (1 kept, 1 trimmed, 0 dropped)
+  [neural-networks.txt chunk 0, 0.09] (trimmed)
+    Training uses backpropagation: the network compares its prediction to the true answer, computes the error, and updates weights using gradient descent.</pre>
 </div>
     <div class="panel" id="panel-search">
 <div class="cmd"><span class="prompt">$</span> tinyrag search "python machine learning"</div>
@@ -210,7 +221,7 @@ Most common terms (by chunks they appear in):
   <p class="sub">Eleven commands, one loop: index &rarr; ask &rarr; inspect &rarr; guard &rarr; serve.</p>
   <div class="grid">
     <div class="card"><h3><code>index</code></h3><p>Build a persistent JSON index from a folder of .txt / .md files. Build once, ask anytime.</p></div>
-    <div class="card"><h3><code>ask</code></h3><p>Extractive answers with a citation — document, chunk, confidence. <code>--sources N</code> shows the ranked evidence behind it.</p></div>
+    <div class="card"><h3><code>ask</code></h3><p>Extractive answers with a citation — document, chunk, confidence. <code>--sources N</code> shows the ranked evidence behind it. <code>--max-context N</code> caps the context the answer is drawn from, trimming chunks to their best sentences and reporting what was cut.</p></div>
     <div class="card"><h3><code>search</code></h3><p>List the chunks that mention a word, with scores and excerpts — the same retriever <code>ask</code> uses, so they always agree.</p></div>
     <div class="card"><h3><code>stats</code></h3><p>Documents, chunks, vocabulary, per-document counts, most common terms — read straight from the saved index.</p></div>
     <div class="card"><h3><code>refresh</code></h3><p>Re-index only added or edited files; drop deleted ones. A no-change refresh says so.</p></div>
@@ -257,7 +268,7 @@ skipped 1 file(s) that are not indexes: stray.json</pre>
 
 <footer>
   <p>Built by <a href="https://github.com/realhassanabbasi">Hassan Abbasi</a> — AI Engineer building AI-powered products with excellent user experiences.<br>
-  TinyRAG is MIT licensed. The terminal transcripts above are real CLI output from tinyrag 1.5.0; the serve examples are real output from tinyrag 1.11.0.</p>
+  TinyRAG is MIT licensed. The terminal transcripts above are real CLI output from tinyrag 1.5.0; the serve examples are real output from tinyrag 1.11.0, and the context-budget transcript is real output from tinyrag 1.12.0.</p>
 </footer>
 
 </div>
