@@ -14,7 +14,9 @@ import urllib.request
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from tinyrag import __version__, answerer, ask_batch, check, chunker, compare, diff, evidence, merge, retriever, search, serve, stats, store, vectorizer
+from tinyrag import (__version__, answerer, ask_batch, check, chunker,
+                     compare, context, diff, evidence, merge, retriever,
+                     search, serve, stats, store, vectorizer)
 from tinyrag.cli import main
 
 
@@ -222,8 +224,222 @@ class TestAskSources(unittest.TestCase):
         self.assertNotIn("Evidence:", out)
         self.assertIn("couldn't find anything", out)
 
-    def test_version_is_1_11_0(self):
-        self.assertEqual(__version__, "1.11.0")
+    def test_version_is_1_12_0(self):
+        self.assertEqual(__version__, "1.12.0")
+
+
+class TestContext(unittest.TestCase):
+    def _setup(self):
+        chunks = [
+            {"doc": "a.txt", "chunk_id": 0,
+             "text": "Backpropagation computes gradients. "
+                     "It uses the chain rule. "
+                     "Neural networks learn from data."},
+            {"doc": "b.txt", "chunk_id": 0,
+             "text": "RAG grounds answers in retrieved documents. "
+                     "Hallucination drops when the model quotes sources."},
+            {"doc": "c.txt", "chunk_id": 0,
+             "text": "Cats sleep all day. Dogs bark at night."},
+        ]
+        docs = [vectorizer.tokenize(c["text"]) for c in chunks]
+        return chunks, vectorizer.build_idf(docs)
+
+    def test_whole_chunks_kept_under_budget(self):
+        chunks, idf = self._setup()
+        total = sum(len(c["text"]) for c in chunks)
+        fit = context.fit_context([(0, 0.9), (1, 0.8), (2, 0.7)], chunks,
+                                  total + 100, {"backpropagation"}, idf)
+        self.assertEqual(fit["kept"], 3)
+        self.assertEqual(fit["trimmed"], 0)
+        self.assertEqual(fit["dropped"], 0)
+        self.assertFalse(fit["truncated"])
+        self.assertEqual(fit["chars_in"], total)
+        self.assertEqual(fit["chars_out"], total)
+        self.assertEqual([e["chunk"]["text"] for e in fit["entries"]],
+                         [c["text"] for c in chunks])
+
+    def test_keeps_best_first_and_trims_next(self):
+        chunks, idf = self._setup()
+        first_sent = "RAG grounds answers in retrieved documents."
+        budget = len(chunks[0]["text"]) + len(first_sent)
+        fit = context.fit_context([(0, 0.9), (1, 0.8)], chunks, budget,
+                                  {"rag"}, idf)
+        self.assertEqual(fit["kept"], 2)
+        self.assertEqual(fit["trimmed"], 1)
+        self.assertEqual(fit["dropped"], 0)
+        self.assertTrue(fit["truncated"])
+        self.assertTrue(fit["entries"][1]["trimmed"])
+        self.assertEqual(fit["entries"][1]["chunk"]["text"], first_sent)
+        self.assertEqual(fit["chars_in"], budget)
+
+    def test_trim_keeps_best_sentences_in_original_order(self):
+        chunks = [
+            {"doc": "a.txt", "chunk_id": 0,
+             "text": "Data flows through layers. Cats sleep all day. "
+                     "Backpropagation computes gradients."},
+            {"doc": "b.txt", "chunk_id": 0,
+             "text": "Data is everywhere in these notes."},
+        ]
+        docs = [vectorizer.tokenize(c["text"]) for c in chunks]
+        idf = vectorizer.build_idf(docs)
+        # "backpropagation" is rarer than "data", so the last sentence
+        # scores highest and is picked first — but the trimmed chunk must
+        # still read in original order, with the no-term middle sentence
+        # dropped.
+        s1 = "Data flows through layers."
+        s3 = "Backpropagation computes gradients."
+        fit = context.fit_context([(0, 0.9)], chunks,
+                                  len(s1) + 1 + len(s3),
+                                  {"data", "backpropagation"}, idf)
+        self.assertEqual(fit["trimmed"], 1)
+        self.assertEqual(fit["entries"][0]["chunk"]["text"],
+                         f"{s1} {s3}")
+
+    def test_trim_drops_sentences_without_query_terms(self):
+        chunks, idf = self._setup()
+        # Budget fits only the first sentence of chunk 1; the second has
+        # no query term, so it is dropped rather than kept as filler.
+        first_sent = "RAG grounds answers in retrieved documents."
+        fit = context.fit_context([(1, 0.8)], chunks, len(first_sent),
+                                  {"rag"}, idf)
+        self.assertEqual(fit["entries"][0]["chunk"]["text"], first_sent)
+
+    def test_drops_chunk_when_nothing_fits(self):
+        chunks, idf = self._setup()
+        fit = context.fit_context([(0, 0.9), (1, 0.8)], chunks, 5,
+                                  {"backpropagation"}, idf)
+        self.assertEqual(fit["kept"], 0)
+        self.assertEqual(fit["dropped"], 2)
+        self.assertTrue(fit["truncated"])
+        self.assertEqual(fit["entries"], [])
+
+    def test_zero_score_chunks_are_not_context(self):
+        chunks, idf = self._setup()
+        fit = context.fit_context([(0, 0.9), (2, 0.0)], chunks, 10 ** 6,
+                                  {"backpropagation"}, idf)
+        self.assertEqual(fit["kept"], 1)
+        self.assertEqual(fit["chars_out"], len(chunks[0]["text"]))
+
+    def test_budget_below_one_raises(self):
+        chunks, idf = self._setup()
+        with self.assertRaises(ValueError):
+            context.fit_context([(0, 0.9)], chunks, 0,
+                                {"backpropagation"}, idf)
+
+    def test_score_sentence_prefers_rare_query_terms(self):
+        # "backpropagation" in 1 of 3 docs, "data" in 2 of 3: the rare
+        # term must score higher, and a sentence with no query term 0.
+        idf = vectorizer.build_idf(
+            [["backpropagation", "x"], ["data", "y"], ["data", "z"]])
+        rare = context.score_sentence("Backpropagation computes gradients.",
+                                      {"backpropagation"}, idf)
+        common = context.score_sentence("Data flows through layers.",
+                                        {"data"}, idf)
+        self.assertGreater(rare, common)
+        self.assertGreater(common, 0)
+        self.assertEqual(
+            context.score_sentence("Cats sleep all day.",
+                                   {"backpropagation"}, idf), 0.0)
+
+    def test_payload_schema(self):
+        chunks, idf = self._setup()
+        fit = context.fit_context([(0, 0.9), (1, 0.8)], chunks, 10 ** 6,
+                                  {"backpropagation"}, idf)
+        payload = context.context_payload(fit)
+        self.assertEqual(set(payload), {"budget", "chars_in", "chars_out",
+                                        "kept", "trimmed", "dropped",
+                                        "truncated", "chunks"})
+        row = payload["chunks"][0]
+        self.assertEqual(set(row), {"doc", "chunk_id", "score", "trimmed",
+                                    "chars", "text"})
+        self.assertEqual(row["doc"], "a.txt")
+
+    def test_format_context_marks_trimmed(self):
+        chunks, idf = self._setup()
+        first_sent = "RAG grounds answers in retrieved documents."
+        budget = len(chunks[0]["text"]) + len(first_sent)
+        fit = context.fit_context([(0, 0.9), (1, 0.8)], chunks, budget,
+                                  {"rag"}, idf)
+        out = context.format_context(fit)
+        self.assertIn("Context:", out)
+        self.assertIn("(trimmed)", out)
+        self.assertIn(first_sent, out)
+
+    def test_format_context_empty_budget(self):
+        chunks, idf = self._setup()
+        fit = context.fit_context([(0, 0.9)], chunks, 5,
+                                  {"backpropagation"}, idf)
+        self.assertIn("nothing fit", context.format_context(fit))
+
+
+class TestAskContext(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.idx = os.path.join(self.tmp, "index.json")
+        base = os.path.join(os.path.dirname(__file__), "..", "tinyrag",
+                            "data", "sample_docs")
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["index", base, "--out", self.idx])
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def _ask(self, *argv):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["ask", *argv, "--index", self.idx])
+        return buf.getvalue()
+
+    def test_max_context_prints_context_line(self):
+        out = self._ask("what is backpropagation", "--max-context", "200")
+        self.assertIn("context:", out)
+        self.assertIn("/ 200 chars", out)
+
+    def test_max_context_caps_chars_in_json(self):
+        out = self._ask("what is backpropagation", "--max-context", "200",
+                        "--json")
+        payload = json.loads(out)  # pure JSON, no stray text
+        self.assertEqual(payload["context"]["budget"], 200)
+        self.assertLessEqual(payload["context"]["chars_in"], 200)
+        self.assertTrue(payload["context"]["truncated"])
+        self.assertIn("backprop", payload["answer"].lower())
+
+    def test_show_context_prints_fitted_context(self):
+        out = self._ask("what is backpropagation", "--max-context", "200",
+                        "--show-context")
+        self.assertIn("Context:", out)
+        self.assertIn("neural-networks.txt", out)
+
+    def test_show_context_without_budget_shows_whole_chunks(self):
+        out = self._ask("what is backpropagation", "--show-context")
+        self.assertIn("Context:", out)
+        self.assertIn("0 trimmed, 0 dropped", out)
+
+    def test_tiny_budget_misses_honestly(self):
+        out = self._ask("what is backpropagation", "--max-context", "5")
+        self.assertIn("couldn't find anything", out)
+        self.assertIn("raise --max-context", out)
+
+    def test_bad_budget_exits_1(self):
+        with self.assertRaises(SystemExit) as cm:
+            self._ask("what is backpropagation", "--max-context", "0")
+        self.assertEqual(cm.exception.code, 1)
+
+    def test_json_context_is_null_without_budget(self):
+        out = self._ask("what is backpropagation", "--json")
+        self.assertIsNone(json.loads(out)["context"])
+
+    def test_huge_budget_answer_matches_no_budget(self):
+        plain = self._ask("what is backpropagation")
+        budgeted = self._ask("what is backpropagation",
+                             "--max-context", "100000")
+        self.assertIn("backprop", budgeted.lower())
+        plain_answer = [l for l in plain.splitlines()
+                        if l.startswith("A: ")][0]
+        budgeted_answer = [l for l in budgeted.splitlines()
+                           if l.startswith("A: ")][0]
+        self.assertEqual(plain_answer, budgeted_answer)
 
 
 class TestRefresh(unittest.TestCase):
@@ -1430,7 +1646,7 @@ class TestServe(unittest.TestCase):
         self.assertEqual(payload, {
             "ok": True,
             "indexes": [{"name": "index", "docs": 3, "chunks": 3}],
-            "version": "1.11.0"})
+            "version": "1.12.0"})
 
     def test_post_ask_round_trip(self):
         status, payload = self._post(
@@ -1565,7 +1781,7 @@ class TestServeMulti(unittest.TestCase):
             "ok": True,
             "indexes": [{"name": "course", "docs": 3, "chunks": 3},
                         {"name": "plants", "docs": 1, "chunks": 1}],
-            "version": "1.11.0"})
+            "version": "1.12.0"})
 
     def test_ask_routes_to_named_index(self):
         status, payload = self._post(
