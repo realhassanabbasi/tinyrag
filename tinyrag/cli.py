@@ -15,6 +15,7 @@ from .check import (check_payload, format_check, load_questions,
                     record_expectations, save_questions)
 from .chunker import chunk_folder
 from .compare import (compare_markdown, compare_payload, format_compare)
+from .context import context_payload, fit_context, format_context
 from .diff import diff_indexes, format_diff
 from .evidence import evidence_payload, format_evidence
 from .merge import DEFAULT_OUT, format_merge, merge_indexes
@@ -230,7 +231,12 @@ def cmd_serve(index_path: str | None = None, index_dir: str | None = None,
 
 
 def cmd_ask(question: str, index_path: str = DEFAULT_INDEX, k: int = 3,
-            sources: int = 0, as_json: bool = False) -> None:
+            sources: int = 0, as_json: bool = False,
+            max_context: int | None = None,
+            show_context: bool = False) -> None:
+    if max_context is not None and max_context < 1:
+        print("max-context must be at least 1")
+        sys.exit(1)
     if not os.path.exists(index_path):
         print("no index found — run `tinyrag index <folder>` first")
         return
@@ -238,8 +244,25 @@ def cmd_ask(question: str, index_path: str = DEFAULT_INDEX, k: int = 3,
     q_terms = tokenize(question)
     q_vec = vectorize(q_terms, index["idf"])
     ranked = retrieve(q_vec, index["vectors"], k=k)
-    result = answer(set(q_terms), index["idf"], ranked, index["chunks"])
-    rows = evidence_payload(ranked, index["chunks"], n=k)
+    fit = None
+    if max_context is not None or show_context:
+        # --show-context without a budget shows the retrieved chunks whole:
+        # the budget is exactly their total length, so nothing is trimmed.
+        budget = max_context
+        if budget is None:
+            budget = sum(len(index["chunks"][i]["text"])
+                         for i, s in ranked if s > 0.0) or 1
+        fit = fit_context(ranked, index["chunks"], budget,
+                          set(q_terms), index["idf"])
+        fitted_chunks = [e["chunk"] for e in fit["entries"]]
+        fitted_ranked = [(i, e["score"])
+                         for i, e in enumerate(fit["entries"])]
+        result = answer(set(q_terms), index["idf"], fitted_ranked,
+                        fitted_chunks)
+        rows = evidence_payload(fitted_ranked, fitted_chunks, n=k)
+    else:
+        result = answer(set(q_terms), index["idf"], ranked, index["chunks"])
+        rows = evidence_payload(ranked, index["chunks"], n=k)
     if as_json:
         payload = {
             "question": question,
@@ -248,6 +271,7 @@ def cmd_ask(question: str, index_path: str = DEFAULT_INDEX, k: int = 3,
             "chunk_id": result["chunk_id"],
             "confidence": result["confidence"],
             "sources": rows,
+            "context": context_payload(fit) if fit is not None else None,
         }
         print(json.dumps(payload, indent=2))
         return
@@ -256,10 +280,20 @@ def cmd_ask(question: str, index_path: str = DEFAULT_INDEX, k: int = 3,
     if result["doc"]:
         print(f"\n   ↳ {result['doc']} (chunk {result['chunk_id']}, "
               f"confidence {result['confidence']})")
+        if max_context is not None and fit is not None:
+            print(f"   context: {fit['chars_in']} / {fit['budget']} chars "
+                  f"({fit['kept']} kept, {fit['trimmed']} trimmed, "
+                  f"{fit['dropped']} dropped)")
+        if show_context and fit is not None:
+            print(f"\n{format_context(fit)}")
         if sources > 0 and rows:
             print(f"\n{format_evidence(rows[:sources])}")
     else:
-        print("\n   (tip: index more documents or rephrase the question)")
+        if fit is not None and not fit["entries"] and max_context is not None:
+            print(f"\n   (tip: nothing fit in {max_context} chars — "
+                  "raise --max-context)")
+        else:
+            print("\n   (tip: index more documents or rephrase the question)")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -278,6 +312,11 @@ def main(argv: list[str] | None = None) -> None:
     pa.add_argument("-k", type=int, default=3, help="chunks to consider")
     pa.add_argument("--sources", type=int, default=0,
                     help="show the top N retrieved chunks as evidence")
+    pa.add_argument("--max-context", type=int, default=None,
+                    help="cap the context the answer is drawn from, "
+                    "in characters")
+    pa.add_argument("--show-context", action="store_true",
+                    help="print the exact context the answer was drawn from")
     pa.add_argument("--json", action="store_true",
                     help="print the answer + sources as JSON")
 
@@ -373,7 +412,8 @@ def main(argv: list[str] | None = None) -> None:
     elif args.cmd == "search":
         cmd_search(args.query, args.index, args.k, args.json)
     elif args.cmd == "ask":
-        cmd_ask(args.question, args.index, args.k, args.sources, args.json)
+        cmd_ask(args.question, args.index, args.k, args.sources, args.json,
+                args.max_context, args.show_context)
     elif args.cmd == "refresh":
         cmd_refresh(args.folder, args.index, args.json)
     elif args.cmd == "stats":
